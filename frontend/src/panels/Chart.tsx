@@ -5,7 +5,7 @@ import {
   type Time, type UTCTimestamp,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
-import { api, pushAlert, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
+import { api, lastQty, pushAlert, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
 import type { Preview } from './Ticket'
 
 const TIMEFRAMES = [
@@ -377,7 +377,7 @@ export function Chart({ preview }: { preview?: Preview }) {
         const rs = rows.current, last = rs[rs.length - 1].close, recent = rs.slice(-5)
         let stop = round2(Math.min(...recent.map((r) => r.low)) - 0.01)
         if (stop >= last) stop = round2(last * 0.995)
-        setTicket({ symbol: symbolRef.current, stop, tp_method: 'r', target_r: 2, target: null, qty: null, risk_usd: null })
+        setTicket({ symbol: symbolRef.current, stop, tp_method: 'r', target_r: 2, target: null, qty: lastQty() })
       }
       if (e.key === 'Escape' && !document.querySelector('.modal')) setTicket(undefined)
     }

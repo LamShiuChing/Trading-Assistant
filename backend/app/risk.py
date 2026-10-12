@@ -19,18 +19,6 @@ ET = ZoneInfo("America/New_York")
 
 # ---------- pure helpers (unit tested) ----------
 
-def position_size(risk_usd: float, entry: float, stop: float, max_value: float, buying_power: float | None) -> int:
-    """Shares such that hitting the stop loses about risk_usd, capped by max position value and buying power."""
-    per_share = abs(entry - stop)
-    if per_share <= 0 or entry <= 0:
-        return 0
-    qty = math.floor(risk_usd / per_share)
-    qty = min(qty, math.floor(max_value / entry))
-    if buying_power is not None:
-        qty = min(qty, math.floor(buying_power / entry))
-    return max(qty, 0)
-
-
 def target_price(method: str, long: bool, entry: float, stop: float, r_mult: float,
                  atr: float | None, levels: dict) -> float | None:
     """Take-profit price for a method. None means no fixed target (trailing)."""
@@ -113,9 +101,9 @@ class RiskManager:
                 continue
             stop = next((stop_price(t.order) for t in trades if t.contract.conId == p.contract.conId
                          and stop_price(t.order) is not None), None)
-            # ponytail: a position with no working stop is counted at one trade's risk. It's unprotected
-            # and gets flagged in the UI; force-flat clears it by the close.
-            risk = abs(p.averageCost - stop) * abs(p.position) if stop else R["risk_per_trade"]
+            # A position with no working stop has no defined risk: counted as 0 here, but flagged "No stop"
+            # in the UI. (App trades always carry a stop; this happens for shares bought outside the app.)
+            risk = max(p.averageCost - stop, 0) * abs(p.position) if stop else 0.0
             items.append({"symbol": p.contract.symbol, "conId": p.contract.conId, "value": abs(p.marketValue),
                           "risk": risk, "unprotected": stop is None})
         held = {i["conId"] for i in items}
@@ -124,7 +112,7 @@ class RiskManager:
             if o.parentId == 0 and o.orderRef.startswith("TA") and t.contract.conId not in held:
                 # Market entries fill at once, so this is brief. Price it from the stop + journal risk.
                 row = db.conn.execute("SELECT entry, risk FROM trades WHERE parent_id=?", (o.orderId,)).fetchone()
-                risk = row["risk"] if row else R["risk_per_trade"]
+                risk = row["risk"] if row else 0.0
                 value = (row["entry"] if row else 0) * o.totalQuantity
                 items.append({"symbol": t.contract.symbol, "conId": t.contract.conId,
                               "value": value, "risk": risk, "unprotected": False})
@@ -152,7 +140,7 @@ class RiskManager:
         if trades_today >= R["max_trades_per_day"]:
             blockers.append(f"Max trades per day reached ({trades_today})")
         return {
-            "limits": {k: R[k] for k in ("risk_per_trade", "daily_max_loss", "max_positions", "max_open_risk",
+            "limits": {k: R[k] for k in ("daily_max_loss", "max_positions", "max_open_risk",
                                          "max_trades_per_day", "max_sector_exposure", "max_position_value")},
             "used": {"day_pnl": day_pnl, "open_risk": round(exp["risk"], 2), "positions": len(exp["items"]),
                      "trades_today": trades_today},
@@ -178,7 +166,14 @@ class RiskManager:
                 exp = {**exp, "risk": exp["risk"] - cur["risk"]}
                 risk = max(new_avg - stop, 0) * total
         if qty <= 0:
-            out.append("Size is 0 (stop too wide, or not enough buying power)")
+            out.append("Enter a size")
+        held_value = sum(abs(p.marketValue) for p in self.broker.ib.portfolio(self.broker.account)
+                         if p.contract.conId == contract.conId and p.position)
+        if held_value + qty * entry > R["max_position_value"]:
+            out.append(f"Position would be ${held_value + qty * entry:,.0f}, over the max ${R['max_position_value']:,} (config.toml)")
+        bp = ((self.portfolio.last or {}).get("summary") or {}).get("buying_power")
+        if bp is not None and qty * entry > bp:
+            out.append(f"${qty * entry:,.0f} is over your buying power ${bp:,.0f}")
         if not any(i["conId"] == contract.conId for i in exp["items"]) and len(exp["items"]) + 1 > R["max_positions"]:
             out.append(f"Max positions ({R['max_positions']}) reached")
         if exp["risk"] + risk > R["max_open_risk"] + 0.01:

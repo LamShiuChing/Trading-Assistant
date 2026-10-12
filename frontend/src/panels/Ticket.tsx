@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError, pushAlert, setTicket, useStore, type Ticket as T, type TpMethod } from '../ws'
+import { api, ApiError, pushAlert, rememberQty, setTicket, useStore, type Ticket as T, type TpMethod } from '../ws'
 
 export type Preview = {
   id: string; symbol: string; side: 'BUY'; qty: number; entry: number; stop: number
   target: number | null; tp_method: string; risk: number; reward: number | null; rr: number | null
-  trail: boolean; size_note: string; blockers: string[]
+  trail: boolean; blockers: string[]
   add: { held: number; total: number; new_avg: number; merged_risk: number; merged_reward: number | null } | null
 }
 
@@ -14,6 +14,8 @@ const METHODS: { v: TpMethod; label: string }[] = [
   { v: 'level', label: 'Next key level' },
   { v: 'trail', label: 'Trail after +1R' },
 ]
+const SHARE_PRESETS = [10, 50, 100, 250, 500]
+const DOLLAR_PRESETS = [5_000, 10_000, 25_000, 50_000]
 const usd = (v: number) => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const METHOD_LABEL: Record<string, string> = { r: 'R multiple', atr: 'ATR', level: 'key level', trail: 'trailing', manual: 'dragged' }
 
@@ -23,6 +25,7 @@ export function usePreview(ticket: T | undefined) {
   const [err, setErr] = useState<string>()
   useEffect(() => {
     if (!ticket) return setP(undefined)
+    if (!ticket.qty) return (setP(undefined), setErr('Enter a size'))
     let alive = true
     const load = () =>
       api<Preview>('/api/ticket/preview', ticket).then(
@@ -43,7 +46,6 @@ export function usePreview(ticket: T | undefined) {
 export function TicketPanel({ preview, error, onStage }: { preview?: Preview; error?: string; onStage: () => void }) {
   const ticket = useStore((s) => s.ticket)
   const chartSymbol = useStore((s) => s.chart?.symbol)
-  const defaultRisk = useStore((s) => s.risk?.limits.risk_per_trade)
 
   if (!ticket) {
     return (
@@ -65,6 +67,25 @@ export function TicketPanel({ preview, error, onStage }: { preview?: Preview; er
         <span className="up">BUY</span> {ticket.symbol} <span className="muted small">market</span>
         <button className="x" title="Cancel (Esc)" onClick={() => setTicket(undefined)}>✕</button>
       </h3>
+      <div className="size">
+        <label>
+          Shares
+          <input className="qty" type="number" min="1" step="1" value={ticket.qty || ''} autoFocus
+            onChange={(e) => upd({ qty: Math.max(0, Math.floor(num(e.target.value) || 0)) })}
+            onKeyDown={(e) => e.key === 'Escape' && setTicket(undefined)} />
+        </label>
+        <div className="presets">
+          {SHARE_PRESETS.map((q) => (
+            <button key={q} className={ticket.qty === q ? 'on' : ''} onClick={() => upd({ qty: q })}>{q}</button>
+          ))}
+        </div>
+        <div className="presets">
+          {DOLLAR_PRESETS.map((d) => (
+            <button key={d} disabled={!preview} title={`As many shares as $${d.toLocaleString()} buys at ~${preview?.entry.toFixed(2)}`}
+              onClick={() => preview && upd({ qty: Math.max(1, Math.floor(d / preview.entry)) })}>${d / 1000}k</button>
+          ))}
+        </div>
+      </div>
       <div className="grid2">
         <label>Entry (est.)<input value={preview ? preview.entry.toFixed(2) : '…'} readOnly tabIndex={-1} /></label>
         <label>Stop<input type="number" step="0.01" value={ticket.stop} onChange={(e) => upd({ stop: num(e.target.value) })} /></label>
@@ -77,16 +98,6 @@ export function TicketPanel({ preview, error, onStage }: { preview?: Preview; er
         {ticket.tp_method === 'r' ? (
           <label>R multiple<input type="number" step="0.5" min="0.5" value={ticket.target_r} onChange={(e) => upd({ target_r: num(e.target.value), target: null })} /></label>
         ) : <span />}
-        <label>
-          Risk $
-          <input type="number" min="1" step="25" value={ticket.risk_usd ?? ''} placeholder={defaultRisk ? String(defaultRisk) : ''}
-            onChange={(e) => upd({ risk_usd: e.target.value ? num(e.target.value) : null })} />
-        </label>
-        <label>
-          Shares
-          <input type="number" min="1" step="1" value={ticket.qty ?? ''} placeholder="auto"
-            onChange={(e) => upd({ qty: e.target.value ? Math.floor(num(e.target.value)) : null })} />
-        </label>
       </div>
       {ticket.target != null && (
         <div className="muted small">
@@ -97,12 +108,11 @@ export function TicketPanel({ preview, error, onStage }: { preview?: Preview; er
       {preview && (
         <>
           <dl className="kv small">
-            <div><dt>Size</dt><dd>{preview.qty.toLocaleString()} sh</dd></div>
-            <div><dt>Risk</dt><dd className="down">{usd(preview.risk)}</dd></div>
-            <div><dt>Target</dt><dd>{preview.target?.toFixed(2) ?? 'trailing'}</dd></div>
+            <div><dt>Value</dt><dd>{usd(preview.qty * preview.entry)}</dd></div>
+            <div><dt>Loss at stop</dt><dd className="down">-{usd(preview.risk)}</dd></div>
+            <div><dt>Profit at TP</dt><dd className="up">{preview.reward != null ? '+' + usd(preview.reward) : 'trailing'}</dd></div>
             <div><dt>R:R</dt><dd>{preview.rr ?? '—'}</dd></div>
           </dl>
-          <div className="muted small">{preview.size_note}</div>
           {preview.add && (
             <div className="warn-text small">
               Adds to {preview.add.held} held → {preview.add.total} sh @ avg {preview.add.new_avg.toFixed(2)}. The new stop and
@@ -130,6 +140,7 @@ export function ConfirmModal({ preview, onClose }: { preview: Preview; onClose: 
         '/api/ticket/confirm', { id: preview.id })
       const sts = r.statuses.map((s) => `${s.type}: ${s.status}`).join(', ')
       pushAlert(r.errors.length ? 'error' : 'info', `${r.ref} sent. ${sts}${r.errors.length ? ' | ' + r.errors.join('; ') : ''}`)
+      rememberQty(preview.qty)
       setTicket(undefined)
     } catch (e) {
       pushAlert('error', e instanceof ApiError ? e.message : String(e))
@@ -170,8 +181,9 @@ export function ConfirmModal({ preview, onClose }: { preview: Preview; onClose: 
         <dl className="kv">
           <div><dt>Stop (market)</dt><dd>{preview.stop.toFixed(2)}{preview.trail ? ' · trails by 1R after +1R' : ''}</dd></div>
           <div><dt>Take profit (limit)</dt><dd>{preview.target?.toFixed(2) ?? 'none, trailing stop'} <span className="muted">{METHOD_LABEL[preview.tp_method] ?? preview.tp_method}</span></dd></div>
-          <div><dt>Risk</dt><dd className="down">{usd(preview.risk)}</dd></div>
-          <div><dt>Reward</dt><dd className="up">{preview.reward != null ? usd(preview.reward) : '—'}</dd></div>
+          <div><dt>Value</dt><dd>~{usd(preview.qty * preview.entry)}</dd></div>
+          <div><dt>Loss at stop</dt><dd className="down">-{usd(preview.risk)}</dd></div>
+          <div><dt>Profit at TP</dt><dd className="up">{preview.reward != null ? '+' + usd(preview.reward) : '—'}</dd></div>
           <div><dt>R:R</dt><dd>{preview.rr ?? '—'}</dd></div>
         </dl>
         {a && (
@@ -203,7 +215,7 @@ export function RiskPanel() {
   ]
   return (
     <section className="side card-flat">
-      <h3>Risk <span className="muted">{usd(l.risk_per_trade)}/trade</span></h3>
+      <h3>Risk limits</h3>
       {bars.map(([k, v, max, text]) => {
         const pct = Math.min(100, (v / max) * 100)
         return (

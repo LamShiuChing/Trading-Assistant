@@ -83,8 +83,7 @@ class TicketReq(BaseModel):
     tp_method: Literal["r", "atr", "level", "trail"] = "r"
     target_r: float | None = Field(default=None, gt=0, le=20)
     target: float | None = Field(default=None, gt=0)  # set when the target line was dragged on the chart
-    qty: int | None = Field(default=None, gt=0)  # optional smaller size; never more than the risk-based size
-    risk_usd: float | None = Field(default=None, gt=0, le=100_000)  # $ risk for this trade; default from config
+    qty: int = Field(gt=0, le=1_000_000)  # shares: you choose the size
 
 
 def _need_connection():
@@ -97,8 +96,7 @@ async def ticket_preview(req: TicketReq):
     """Stage: size, $ risk, R:R and every risk check. Nothing is sent to IBKR."""
     _need_connection()
     try:
-        return await orders.preview(req.symbol.upper(), req.side, req.stop, req.tp_method, req.target_r, req.target,
-                                    req.qty, req.risk_usd)
+        return await orders.preview(req.symbol.upper(), req.side, req.qty, req.stop, req.tp_method, req.target_r, req.target)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

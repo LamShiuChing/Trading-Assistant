@@ -39,7 +39,7 @@ export type Portfolio = {
   fills: Fill[]
 }
 export type Risk = {
-  limits: { risk_per_trade: number; daily_max_loss: number; max_positions: number; max_open_risk: number
+  limits: { daily_max_loss: number; max_positions: number; max_open_risk: number
     max_trades_per_day: number; max_sector_exposure: number; max_position_value: number }
   used: { day_pnl: number | null; open_risk: number; positions: number; trades_today: number }
   unprotected: string[]
@@ -51,8 +51,11 @@ export type TpMethod = 'r' | 'atr' | 'level' | 'trail'
 /** The order being prepared (local only; nothing is sent until Confirm). */
 export type Ticket = {
   symbol: string; stop: number  // long only, market entry: the entry is the live price
-  tp_method: TpMethod; target_r: number; target: number | null; qty: number | null; risk_usd: number | null
+  tp_method: TpMethod; target_r: number; target: number | null; qty: number
 }
+/** The size you used last time: the default for the next ticket. */
+export const lastQty = () => Number(localStorage.getItem('ta.qty')) || 100
+export const rememberQty = (q: number) => localStorage.setItem('ta.qty', String(q))
 type State = {
   ws: 'connecting' | 'open' | 'closed'
   restarting?: string

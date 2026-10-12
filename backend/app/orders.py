@@ -29,7 +29,7 @@ from .config import CFG
 from .hub import publish
 from .market import atr
 from .portfolio import num
-from .risk import ET, R, position_size, target_price
+from .risk import ET, R, target_price
 
 log = logging.getLogger(__name__)
 PREVIEW_TTL = 120  # s; a staged ticket must be confirmed within this
@@ -64,8 +64,8 @@ class Orders:
 
     # ---------- stage ----------
 
-    async def preview(self, symbol: str, side: str, stop: float, tp_method: str, target_r: float | None,
-                      target: float | None, qty_max: int | None = None, risk_usd: float | None = None) -> dict:
+    async def preview(self, symbol: str, side: str, qty: int, stop: float, tp_method: str, target_r: float | None,
+                      target: float | None) -> dict:
         if side != "BUY":
             raise ValueError("Short selling is disabled. This app only buys to open.")
         ib = self.broker.ib
@@ -93,16 +93,7 @@ class Orders:
             levels = self.chart.levels if on_chart else {}
             target = target_price(method, True, entry, stop, target_r or R["default_target_r"], a, levels)
 
-        risk_budget = risk_usd or R["risk_per_trade"]
-        summary = (self.portfolio.last or {}).get("summary", {})
-        auto = position_size(risk_budget, entry, stop, R["max_position_value"], summary.get("buying_power"))
-        qty = min(auto, qty_max) if qty_max else auto
         per_share = entry - stop
-        size_note = f"${risk_budget:,.0f} risk ÷ ${per_share:.2f} stop distance = {math.floor(risk_budget / per_share):,} sh"
-        if auto < math.floor(risk_budget / per_share):
-            size_note += f", capped to {auto:,} by max position ${R['max_position_value']:,} or buying power"
-        if qty_max and qty_max < auto:
-            size_note += f", you chose {qty:,}"
 
         held, held_avg = self._held(contract.conId)
         add = None
@@ -117,7 +108,7 @@ class Orders:
             "entry": entry, "stop": stop, "target": target, "tp_method": method,
             "risk": round(qty * per_share, 2), "reward": round(qty * (target - entry), 2) if target else None,
             "rr": round((target - entry) / per_share, 2) if target else None,
-            "trail": method == "trail", "size_note": size_note, "add": add,
+            "trail": method == "trail", "add": add,
             "blockers": await self.risk.check_entry(contract, qty, entry, stop),
         }
         now = time.monotonic()

@@ -1,17 +1,9 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.risk import parse_liquid_hours, position_size, target_price
+from app.risk import parse_liquid_hours, target_price
 
 ET = ZoneInfo("US/Eastern")
-
-
-def test_position_size():
-    assert position_size(250, 50.00, 49.50, 100_000, None) == 500         # $250 / $0.50
-    assert position_size(250, 500.00, 499.90, 100_000, None) == 200       # capped: $100k / $500
-    assert position_size(250, 50.00, 49.50, 100_000, 10_000) == 200       # capped by buying power
-    assert position_size(250, 50.00, 50.00, 100_000, None) == 0           # zero stop distance
-    assert position_size(250, 20.00, 20.60, 100_000, None) == 416         # short: stop above
 
 
 def test_targets():

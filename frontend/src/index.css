@@ -136,6 +136,12 @@ select { font: inherit; color: inherit; background: var(--panel); border: 1px so
 .ticket { display: flex; flex-direction: column; gap: 8px; }
 .ticket h3 { display: flex; align-items: center; gap: 6px; margin: 0; }
 .ticket .x { margin-left: auto; padding: 0 6px; background: none; border: 0; color: var(--muted); }
+.size { display: flex; flex-direction: column; gap: 4px; }
+.size label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 12px; }
+.size .qty { font-size: 18px; font-weight: 600; padding: 6px 10px; }
+.presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(40px, 1fr)); gap: 4px; }
+.presets button { padding: 3px 0; font-size: 12px; }
+.presets button.on { background: #263042; border-color: #3b4658; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .grid2 label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 12px; }
 .grid2 input, .grid2 select { width: 100%; }

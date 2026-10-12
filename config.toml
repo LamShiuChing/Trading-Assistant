@@ -6,13 +6,12 @@ port = 8765
 allow_live = false
 
 [risk]
-risk_per_trade = 250          # $ lost if the stop is hit; position size = this / stop distance
 daily_max_loss = 750          # realized + unrealized day P/L at or below -this locks new entries for the day
 max_positions = 3             # open positions + working entries
 max_open_risk = 750           # $ at stop across open positions + working entries
 max_trades_per_day = 10       # filled entries
 max_sector_exposure = 150000  # $ market value per industry (IBKR contract-details industry)
-max_position_value = 100000   # $ cap per position, whatever the stop distance
+max_position_value = 100000   # $ max per position: a bigger order is blocked (you choose the size)
 default_target_r = 2.0        # take-profit default: fixed R multiple
 atr_target_mult = 1.5         # ATR take-profit: entry +/- this x ATR(14) on 5-min bars
 entry_cutoff_min = 30         # no new entries in the last N minutes of the session (15:30 on a normal day)
