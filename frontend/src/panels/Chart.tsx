@@ -7,7 +7,7 @@ import {
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
 import { api, lastQty, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
 import type { Preview } from './Ticket'
-import { rsi } from '../indicators'
+import { rsi, rsiDivergences } from '../indicators'
 
 const TIMEFRAMES = [
   { tf: 1, key: '1', label: '1m' },
@@ -37,6 +37,13 @@ function aggregate(rows: Row[], tf: number): Row[] {
 }
 
 const t = (x: number) => x as UTCTimestamp
+/** RSI divergences as yellow segments between the two RSI pivots. */
+const divSegments = (data: Row[]): Seg[] => {
+  const v = rsi(data.map((r) => r.close))
+  return rsiDivergences(data.map((r) => r.low), data.map((r) => r.high), v).map((d) => ({
+    t1: data[d.i1].time, v1: v[d.i1]!, t2: data[d.i2].time, v2: v[d.i2]!, label: d.kind === 'bull' ? 'Bull' : 'Bear',
+  }))
+}
 const rsiPoints = (data: Row[]) => {
   const v = rsi(data.map((r) => r.close))
   return data.map((r, i) => (v[i] == null ? { time: t(r.time) } : { time: t(r.time), value: Math.round(v[i]! * 100) / 100 }))
@@ -98,6 +105,48 @@ class RangeBoxes implements ISeriesPrimitive<Time> {
 type Zone = { from: number; to: number; color: string }
 
 /** Full-width shaded bands between two prices (position risk / reward), drawn behind the candles. */
+type Seg = { t1: number; v1: number; t2: number; v2: number; label: string }
+
+/** Yellow line segments on the RSI pane (divergences), with a small Bull / Bear label. */
+class Segments implements ISeriesPrimitive<Time> {
+  segs: Seg[] = []
+  private p?: SeriesAttachedParameter<Time>
+  attached(p: SeriesAttachedParameter<Time>) { this.p = p }
+  detached() { this.p = undefined }
+  set(s: Seg[]) {
+    this.segs = s
+    this.p?.requestUpdate()
+  }
+  paneViews() {
+    return [{
+      zOrder: () => 'top' as const,
+      renderer: () => ({
+        draw: (target: CanvasRenderingTarget2D) => {
+          const p = this.p
+          if (!p) return
+          const ts = p.chart.timeScale()
+          target.useMediaCoordinateSpace(({ context: ctx }) => {
+            ctx.strokeStyle = '#facc15'
+            ctx.fillStyle = '#facc15'
+            ctx.lineWidth = 2
+            ctx.font = '10px system-ui, sans-serif'
+            for (const s of this.segs) {
+              const x1 = ts.timeToCoordinate(t(s.t1)), x2 = ts.timeToCoordinate(t(s.t2))
+              const y1 = p.series.priceToCoordinate(s.v1), y2 = p.series.priceToCoordinate(s.v2)
+              if (x1 == null || x2 == null || y1 == null || y2 == null) continue
+              ctx.beginPath()
+              ctx.moveTo(x1, y1)
+              ctx.lineTo(x2, y2)
+              ctx.stroke()
+              ctx.fillText(s.label, x2 + 3, y2 + (s.label === 'Bull' ? 12 : -4))
+            }
+          })
+        },
+      }),
+    }]
+  }
+}
+
 class Zones implements ISeriesPrimitive<Time> {
   zones: Zone[] = []
   private p?: SeriesAttachedParameter<Time>
@@ -143,6 +192,7 @@ type Api = {
   vwap: ISeriesApi<'Line'>
   volume: ISeriesApi<'Histogram'>
   rsi: ISeriesApi<'Line'>
+  divs: Segments
   boxes: RangeBoxes
   zones: Zones
   lines: IPriceLine[]
@@ -198,6 +248,8 @@ export function Chart({ preview }: { preview?: Preview }) {
     chart.panes()[2].setStretchFactor(0.4)
     for (const level of [70, 30])
       rsiSeries.createPriceLine({ price: level, color: '#64748b', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: '' })
+    const divs = new Segments()
+    rsiSeries.attachPrimitive(divs)
     const boxes = new RangeBoxes()
     candles.attachPrimitive(boxes)
     const zones = new Zones()
@@ -207,7 +259,7 @@ export function Chart({ preview }: { preview?: Preview }) {
       const v = p.seriesData.get(volume) as { value: number } | undefined
       setLegend(c && p.time ? { time: p.time as number, ...c, volume: v?.value ?? 0, vwap: null } : undefined)
     })
-    apiRef.current = { chart, candles, vwap: vw, volume, rsi: rsiSeries, boxes, zones, lines: [] }
+    apiRef.current = { chart, candles, vwap: vw, volume, rsi: rsiSeries, divs, boxes, zones, lines: [] }
     return () => chart.remove()
   }, [])
 
@@ -235,6 +287,7 @@ export function Chart({ preview }: { preview?: Preview }) {
     a.vwap.setData(data.map((r, i) => vwap(r, data[i + 1])))
     a.volume.setData(data.map(vol))
     a.rsi.setData(rsiPoints(data))
+    a.divs.set(divSegments(data))
     drawLevels(tfNow)
   }
 
@@ -269,7 +322,9 @@ export function Chart({ preview }: { preview?: Preview }) {
       a.volume.update(vol(b))
     })
     // RSI depends on all history: recompute over the full series, redraw only the newest point(s).
-    const pts = rsiPoints(aggregate(rs, tf))
+    const full = aggregate(rs, tf)
+    const pts = rsiPoints(full)
+    a.divs.set(divSegments(full))
     const cutoff = Math.max(firstNew, (a.rsi.data().at(-1)?.time as number | undefined) ?? 0)
     for (const p of pts) if ((p.time as number) >= cutoff) a.rsi.update(p)
     levels.current = barMsg.levels
