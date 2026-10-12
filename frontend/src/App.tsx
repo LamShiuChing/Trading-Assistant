@@ -100,20 +100,36 @@ function Workspace({ view }: { view: View }) {
   )
 }
 
+const ALERT_MS = { info: 6000, warn: 10000, error: 15000 }
+
 function Alerts() {
   const alerts = useStore((s) => s.alerts)
-  useEffect(() => {
-    // Info disappears after 8 s; warnings and errors stay until dismissed.
-    const ids = alerts.filter((a) => a.level === 'info').map((a) => setTimeout(() => dismissAlert(a.at), 8000))
-    return () => ids.forEach(clearTimeout)
-  }, [alerts])
   return (
     <div className="alerts">
-      {alerts.map((a) => (
-        <div key={a.at} className={`alert ${a.level}`} onClick={() => dismissAlert(a.at)}>
-          {a.message}
-        </div>
-      ))}
+      {alerts.map((a) => <Toast key={a.at} alert={a} />)}
+    </div>
+  )
+}
+
+/** Fades out on its own (longer for warnings/errors); hover keeps it; × closes it now. */
+function Toast({ alert: a }: { alert: { level: 'info' | 'warn' | 'error'; message: string; at: number } }) {
+  const [leaving, setLeaving] = useState(false)
+  const [hover, setHover] = useState(false)
+  useEffect(() => {
+    if (hover) return
+    const fade = setTimeout(() => setLeaving(true), ALERT_MS[a.level])
+    return () => clearTimeout(fade)
+  }, [hover, a.level])
+  useEffect(() => {
+    if (!leaving) return
+    const gone = setTimeout(() => dismissAlert(a.at), 400)  // matches the CSS fade
+    return () => clearTimeout(gone)
+  }, [leaving, a.at])
+  return (
+    <div className={`alert ${a.level}${leaving ? ' leaving' : ''}`} onMouseEnter={() => (setHover(true), setLeaving(false))}
+      onMouseLeave={() => setHover(false)}>
+      <span>{a.message}</span>
+      <button className="x" aria-label="Close" onClick={() => dismissAlert(a.at)}>×</button>
     </div>
   )
 }
