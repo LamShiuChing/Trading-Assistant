@@ -5,7 +5,8 @@ import {
   type Time, type UTCTimestamp,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
-import { api, useStore, type Levels, type Range, type Row } from '../ws'
+import { api, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
+import type { Preview } from './Ticket'
 
 const TIMEFRAMES = [
   { tf: 1, key: '1', label: '1m' },
@@ -106,16 +107,25 @@ type Api = {
   lines: IPriceLine[]
 }
 
-export function Chart() {
+const round2 = (x: number) => Math.round(x * 100) / 100
+type LineKey = 'entry' | 'stop' | 'target'
+
+export function Chart({ preview }: { preview?: Preview }) {
   const el = useRef<HTMLDivElement>(null)
   const apiRef = useRef<Api>(null)
   const rows = useRef<Row[]>([])
   const levels = useRef<Levels>({})
   const [tf, setTf] = useState(1)
   const [legend, setLegend] = useState<Row>()
+  const symbolRef = useRef<string>(undefined)
   const chartMsg = useStore((s) => s.chart)
+  symbolRef.current = chartMsg?.bars ? chartMsg.symbol : undefined
   const barMsg = useStore((s) => s.bar)
   const conn = useStore((s) => s.connection)
+  const ticket = useStore((s) => s.ticket)
+  const ticketRef = useRef<Ticket>(undefined)
+  ticketRef.current = ticket
+  const tlines = useRef<Partial<Record<LineKey, IPriceLine>>>({})
 
   // Create the chart once.
   useEffect(() => {
@@ -177,6 +187,7 @@ export function Chart() {
   useEffect(() => {
     if (!chartMsg?.bars) return
     rows.current = chartMsg.bars
+    if (ticketRef.current && ticketRef.current.symbol !== chartMsg.symbol) setTicket(undefined)
     levels.current = chartMsg.levels ?? {}
     drawAll(tf)
     apiRef.current!.chart.timeScale().scrollToRealTime()
@@ -211,12 +222,83 @@ export function Chart() {
     if (rows.current.length) drawAll(tf)
   }, [tf]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keyboard: 1 / 5 / F switch timeframe (ignored while typing).
+  // Entry / stop / target lines for the staged ticket.
+  useEffect(() => {
+    const a = apiRef.current!
+    Object.values(tlines.current).forEach((l) => l && a.candles.removePriceLine(l))
+    tlines.current = {}
+    if (!ticket || ticket.symbol !== chartMsg?.symbol) return
+    const mk = (price: number, color: string, title: string) =>
+      a.candles.createPriceLine({ price, color, lineWidth: 2, lineStyle: LineStyle.Solid, title, axisLabelVisible: true })
+    tlines.current.entry = mk(ticket.entry, '#3b82f6', `${ticket.side === 'BUY' ? 'BUY' : 'SELL'} ${preview?.qty ?? ''}`)
+    tlines.current.stop = mk(ticket.stop, '#ef4444', `STOP ${preview ? '-$' + preview.risk.toFixed(0) : ''}`)
+    const tgt = ticket.target ?? preview?.target
+    if (tgt != null) tlines.current.target = mk(tgt, '#22c55e', `TARGET ${preview?.rr ? preview.rr + 'R' : ''}`)
+  }, [ticket, preview, chartMsg?.symbol])
+
+  // Drag those lines with the mouse. The chart's own panning is paused while dragging.
+  useEffect(() => {
+    const box = el.current!
+    let drag: LineKey | null = null
+    const y = (e: MouseEvent) => e.clientY - box.getBoundingClientRect().top
+    const hit = (py: number): LineKey | null => {
+      const a = apiRef.current!
+      for (const k of ['stop', 'target', 'entry'] as const) {
+        const l = tlines.current[k]
+        const ly = l && a.candles.priceToCoordinate(l.options().price)
+        if (ly != null && Math.abs(ly - py) < 6) return k
+      }
+      return null
+    }
+    const down = (e: MouseEvent) => {
+      const k = hit(y(e))
+      if (!k) return
+      drag = k
+      apiRef.current!.chart.applyOptions({ handleScroll: false, handleScale: false })
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    const move = (e: MouseEvent) => {
+      if (!drag) {
+        box.style.cursor = hit(y(e)) ? 'ns-resize' : ''
+        return
+      }
+      const p = apiRef.current!.candles.coordinateToPrice(y(e))
+      if (p != null) tlines.current[drag]!.applyOptions({ price: round2(p) })
+    }
+    const up = () => {
+      if (!drag) return
+      const t = ticketRef.current
+      if (t) setTicket({ ...t, [drag]: tlines.current[drag]!.options().price })
+      drag = null
+      apiRef.current!.chart.applyOptions({ handleScroll: true, handleScale: true })
+    }
+    box.addEventListener('mousedown', down, true)
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => {
+      box.removeEventListener('mousedown', down, true)
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+  }, [])
+
+  // Keyboard: 1 / 5 / F switch timeframe, B / S stage a long / short, Esc drops it (ignored while typing).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, textarea') || e.ctrlKey || e.metaKey || e.altKey) return
-      const hit = TIMEFRAMES.find((x) => x.key === e.key.toLowerCase())
+      const k = e.key.toLowerCase()
+      const hit = TIMEFRAMES.find((x) => x.key === k)
       if (hit) setTf(hit.tf)
+      if ((k === 'b' || k === 's') && rows.current.length && symbolRef.current) {
+        // Stage at the last price; stop just beyond the last 5 one-minute bars. Drag the lines to adjust.
+        const rs = rows.current, last = rs[rs.length - 1].close, recent = rs.slice(-5), long = k === 'b'
+        let stop = round2(long ? Math.min(...recent.map((r) => r.low)) - 0.01 : Math.max(...recent.map((r) => r.high)) + 0.01)
+        if (long ? stop >= last : stop <= last) stop = round2(long ? last * 0.995 : last * 1.005)
+        setTicket({ symbol: symbolRef.current, side: long ? 'BUY' : 'SELL', entry: round2(last), stop,
+                    tp_method: 'r', target_r: 2, target: null, qty: null })
+      }
+      if (e.key === 'Escape' && !document.querySelector('.modal')) setTicket(undefined)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

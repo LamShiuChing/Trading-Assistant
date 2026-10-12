@@ -67,11 +67,33 @@ def levels(bars) -> dict:
     return out
 
 
+def atr(bars, minutes: int = 5, n: int = 14) -> float | None:
+    """ATR(n) of today's regular-session bars, aggregated to `minutes`. None until there are n bars."""
+    if not bars:
+        return None
+    today = bars[-1].date.date()
+    agg: dict[int, list] = {}
+    for b in bars:
+        if b.date.date() == today and _rth(b.date):
+            k = (b.date.hour * 60 + b.date.minute) // minutes
+            if k in agg:
+                a = agg[k]
+                a[1], a[2], a[3] = max(a[1], b.high), min(a[2], b.low), b.close
+            else:
+                agg[k] = [b.open, b.high, b.low, b.close]
+    rows = [agg[k] for k in sorted(agg)]
+    if len(rows) < n + 1:
+        return None
+    trs = [max(h - l, abs(h - rows[i - 1][3]), abs(l - rows[i - 1][3])) for i, (_, h, l, _) in enumerate(rows) if i]
+    return round(sum(trs[-n:]) / n, 4)
+
+
 class ChartFeed:
     """One live 1-min subscription for the symbol on the chart. Resubscribes after reconnects."""
 
     def __init__(self, broker, symbol: str):
         self.broker, self.symbol, self.bars = broker, symbol, None
+        self.levels: dict = {}
         broker.on_ready.append(self.resubscribe)
 
     async def resubscribe(self) -> None:
@@ -101,12 +123,14 @@ class ChartFeed:
         self.bars = bars
         bars.updateEvent += self._on_update
         rows, lv = analyze(bars)
+        self.levels = lv
         publish("chart", {"symbol": symbol, "bars": rows, "levels": lv})
 
     def _on_update(self, bars, has_new_bar: bool) -> None:
         if bars is not self.bars:
             return
         rows, lv = analyze(bars)
+        self.levels = lv
         # On a new bar, the previous one was also finalised, so send both.
         publish("bar", {"symbol": self.symbol, "rows": rows[-2:], "levels": lv})
         # Keep the full snapshot current for UIs that connect later (not broadcast).

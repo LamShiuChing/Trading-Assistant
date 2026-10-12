@@ -36,9 +36,27 @@ export type Portfolio = {
   orders: Order[]
   fills: Fill[]
 }
+export type Risk = {
+  limits: { risk_per_trade: number; daily_max_loss: number; max_positions: number; max_open_risk: number
+    max_trades_per_day: number; max_sector_exposure: number; max_position_value: number }
+  used: { day_pnl: number | null; open_risk: number; positions: number; trades_today: number }
+  unprotected: string[]
+  session: { open: string; close: string; cutoff: string; flatten: string } | null
+  blockers: string[]
+}
+export type Alert = { level: 'info' | 'warn' | 'error'; message: string; at: number }
+export type TpMethod = 'r' | 'atr' | 'level' | 'trail'
+/** The order being prepared (local only; nothing is sent until Confirm). */
+export type Ticket = {
+  symbol: string; side: 'BUY' | 'SELL'; entry: number; stop: number
+  tp_method: TpMethod; target_r: number; target: number | null; qty: number | null
+}
 type State = {
   ws: 'connecting' | 'open' | 'closed'
   restarting?: string
+  risk?: Risk
+  alerts: Alert[]
+  ticket?: Ticket
   connection?: Connection
   login?: LoginProgress
   chart?: ChartMsg
@@ -46,7 +64,7 @@ type State = {
   portfolio?: Portfolio
 }
 
-let state: State = { ws: 'connecting' }
+let state: State = { ws: 'connecting', alerts: [] }
 const subs = new Set<() => void>()
 
 function set(patch: Partial<State>) {
@@ -59,7 +77,8 @@ function connect() {
   ws.onopen = () => set({ ws: 'open' })
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data)
-    set({ [m.type]: m.data })
+    if (m.type === 'alert') set({ alerts: [...state.alerts, { ...m.data, at: Date.now() }].slice(-5) })
+    else set({ [m.type]: m.data })
   }
   ws.onclose = () => {
     set({ ws: 'closed' })
@@ -67,6 +86,11 @@ function connect() {
   }
 }
 connect()
+
+export const setTicket = (ticket: Ticket | undefined) => set({ ticket })
+export const pushAlert = (level: Alert['level'], message: string) =>
+  set({ alerts: [...state.alerts, { level, message, at: Date.now() }].slice(-5) })
+export const dismissAlert = (at: number) => set({ alerts: state.alerts.filter((a) => a.at !== at) })
 
 export function useStore<T>(select: (s: State) => T): T {
   return useSyncExternalStore(

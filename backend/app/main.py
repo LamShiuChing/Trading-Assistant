@@ -16,7 +16,9 @@ from . import gateway, hub
 from .config import CFG, DATA, ROOT
 from .ib import PORTS, Broker, port_open
 from .market import ChartFeed
+from .orders import Orders
 from .portfolio import Portfolio
+from .risk import RiskManager
 
 logging.basicConfig(
     filename=DATA / "logs" / "app.log", level=logging.INFO,
@@ -32,9 +34,10 @@ portfolio = Portfolio(broker)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     hub.publish("connection", broker.snapshot())
-    task = asyncio.create_task(broker.run())
+    tasks = [asyncio.create_task(broker.run()), asyncio.create_task(risk.run())]
     yield
-    task.cancel()
+    for t in tasks:
+        t.cancel()
     broker.ib.disconnect()
 
 
@@ -69,6 +72,77 @@ def _save_setting(**kw) -> None:
 
 
 chart = ChartFeed(broker, _settings().get("symbol", "SPY"))
+risk = RiskManager(broker, portfolio)
+orders = Orders(broker, risk, chart, portfolio)
+
+
+class TicketReq(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9.\- ]{0,11}$")
+    side: Literal["BUY", "SELL"]
+    entry: float = Field(gt=0)
+    stop: float = Field(gt=0)
+    tp_method: Literal["r", "atr", "level", "trail"] = "r"
+    target_r: float | None = Field(default=None, gt=0, le=20)
+    target: float | None = Field(default=None, gt=0)  # set when the target line was dragged on the chart
+    qty: int | None = Field(default=None, gt=0)  # optional smaller size; never more than the risk-based size
+
+
+def _need_connection():
+    if not broker.can_trade():
+        raise HTTPException(409, "Not connected to IBKR (or the account doesn't match the mode).")
+
+
+@app.post("/api/ticket/preview")
+async def ticket_preview(req: TicketReq):
+    """Stage: size, $ risk, R:R and every risk check. Nothing is sent to IBKR."""
+    _need_connection()
+    try:
+        return await orders.preview(req.symbol.upper(), req.side, req.entry, req.stop, req.tp_method, req.target_r, req.target, req.qty)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class ConfirmReq(BaseModel):
+    id: str
+
+
+@app.post("/api/ticket/confirm")
+async def ticket_confirm(req: ConfirmReq):
+    """Confirm a staged ticket: re-checks the rules, then sends the bracket."""
+    _need_connection()
+    try:
+        return await orders.confirm(req.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/orders/{order_id}/cancel")
+async def cancel_order(order_id: int):
+    _need_connection()
+    try:
+        orders.cancel(order_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
+
+class FlattenReq(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9.\- ]{0,11}$")
+
+
+@app.post("/api/flatten")
+async def flatten(req: FlattenReq):
+    _need_connection()
+    await orders.flatten_symbol(req.symbol.upper())
+    return {"ok": True}
+
+
+@app.post("/api/kill")
+async def kill_switch():
+    """Cancel every working order and close every position. Works even if the account/mode check failed."""
+    if broker.state not in ("ready", "degraded"):
+        raise HTTPException(409, "Not connected to IBKR: can't cancel or flatten. Use TWS or IBKR Mobile.")
+    return await orders.flatten_all("Kill switch")
 
 
 @app.get("/api/health")

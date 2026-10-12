@@ -7,7 +7,8 @@ latest: dict[str, object] = {}
 
 
 def publish(type_: str, data) -> None:
-    latest[type_] = data
+    if type_ != "alert":  # alerts are events, not state: don't replay them to UIs that connect later
+        latest[type_] = data
     msg = json.dumps({"type": type_, "data": data}, default=str)
     for ws in list(clients):
         asyncio.get_running_loop().create_task(_send(ws, msg))

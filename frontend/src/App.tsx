@@ -3,7 +3,8 @@ import { Boundary } from './Boundary'
 import { Chart } from './panels/Chart'
 import { Login } from './panels/Login'
 import { AccountSummary, PortfolioTabs } from './panels/Portfolio'
-import { api, ApiError, restartApp, useStore } from './ws'
+import { ConfirmModal, RiskPanel, TicketPanel, usePreview } from './panels/Ticket'
+import { api, ApiError, dismissAlert, pushAlert, restartApp, useStore } from './ws'
 
 const STATE_LABEL = {
   disconnected: 'Disconnected',
@@ -50,14 +51,68 @@ export default function App() {
       {showLogin ? (
         <Login />
       ) : (
-        <main className="workspace">
-          <Boundary name="Chart"><Chart /></Boundary>
-          <Boundary name="Account"><AccountSummary /></Boundary>
-          <Boundary name="Portfolio"><PortfolioTabs /></Boundary>
-        </main>
+        <Workspace />
       )}
+      <Alerts />
     </div>
   )
+}
+
+function Workspace() {
+  const ticket = useStore((s) => s.ticket)
+  const { preview, error } = usePreview(ticket)
+  const [staged, setStaged] = useState(false)
+  const stage = () => preview && !preview.blockers.length && setStaged(true)
+
+  // Enter stages the ticket (first click); the confirm dialog takes the second Enter.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !staged && ticket && !(e.target as HTMLElement).closest('select, button')) stage()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
+  return (
+    <main className="workspace">
+      <Boundary name="Chart"><Chart preview={preview} /></Boundary>
+      <div className="right">
+        <Boundary name="Account"><AccountSummary /></Boundary>
+        <Boundary name="Ticket"><TicketPanel preview={preview} error={error} onStage={stage} /></Boundary>
+        <Boundary name="Risk"><RiskPanel /></Boundary>
+      </div>
+      <Boundary name="Portfolio"><PortfolioTabs /></Boundary>
+      {staged && preview && <ConfirmModal preview={preview} onClose={() => setStaged(false)} />}
+    </main>
+  )
+}
+
+function Alerts() {
+  const alerts = useStore((s) => s.alerts)
+  useEffect(() => {
+    // Info disappears after 8 s; warnings and errors stay until dismissed.
+    const ids = alerts.filter((a) => a.level === 'info').map((a) => setTimeout(() => dismissAlert(a.at), 8000))
+    return () => ids.forEach(clearTimeout)
+  }, [alerts])
+  return (
+    <div className="alerts">
+      {alerts.map((a) => (
+        <div key={a.at} className={`alert ${a.level}`} onClick={() => dismissAlert(a.at)}>
+          {a.message}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** One click: cancel every order and close every position. Also Ctrl+Shift+K. */
+async function killSwitch() {
+  pushAlert('warn', 'Kill switch: cancelling all orders and closing all positions…')
+  try {
+    await api('/api/kill', {})  // the result arrives as an alert once IBKR confirms
+  } catch (e) {
+    pushAlert('error', e instanceof ApiError ? e.message : String(e))
+  }
 }
 
 function Header() {
@@ -78,7 +133,10 @@ function Header() {
   }
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setBlockers(undefined)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setBlockers(undefined)
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'k') (e.preventDefault(), killSwitch())
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
@@ -90,6 +148,10 @@ function Header() {
       <span className={`pill ${conn.state}`}>{STATE_LABEL[conn.state]}</span>
       {conn.account && <span className="muted">{conn.account}</span>}
       <span className="spacer" />
+      <button className="kill" onClick={killSwitch} disabled={conn.state !== 'ready' && conn.state !== 'degraded'}
+        title="Cancel ALL orders and close ALL positions now (Ctrl+Shift+K)">
+        KILL SWITCH
+      </button>
       <button onClick={restartApp} title="Restart the app and load the latest code. IBKR stays logged in. (Ctrl+R only reloads the screen.)">
         Restart
       </button>
@@ -99,13 +161,20 @@ function Header() {
         <div className="modal" onClick={() => setBlockers(undefined)}>
           <div className="card" onClick={(e) => e.stopPropagation()}>
             <h3>Can't quit yet</h3>
-            <p>Flatten and cancel these first (the flatten button comes in phase 2), or close the window instead: the app keeps running in the background until you're flat.</p>
+            <p>These are still open. Flatten everything and quit, or close the window instead: the app keeps running in the background and still force-flattens before the close.</p>
             <ul>
               {blockers.map((b) => (
                 <li key={b}>{b}</li>
               ))}
             </ul>
-            <button onClick={() => setBlockers(undefined)}>OK</button>
+            <div className="row">
+              <button onClick={() => setBlockers(undefined)}>Keep running</button>
+              <button className="kill" onClick={async () => {
+                setBlockers(undefined)
+                await killSwitch()
+                quit()
+              }}>Flatten everything, then quit</button>
+            </div>
           </div>
         </div>
       )}

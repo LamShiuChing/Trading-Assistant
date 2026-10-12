@@ -12,6 +12,13 @@ def num(x):
     return None if x is None or math.isnan(x) or abs(x) > 1e300 else x
 
 
+def stop_price(o) -> float | None:
+    """Current stop level of an exit order. For TRAIL, auxPrice is the trailing amount, not a price."""
+    if o.orderType == "TRAIL":
+        return num(o.trailStopPrice)
+    return num(o.auxPrice) if o.orderType in ("STP", "STP LMT") else None
+
+
 def current_r(qty: float, avg: float, last: float | None, stop: float | None) -> float | None:
     """Open profit in R, where 1R = distance from entry to the working stop."""
     if not (qty and last and stop) or avg == stop:
@@ -22,6 +29,7 @@ def current_r(qty: float, avg: float, last: float | None, stop: float | None) ->
 class Portfolio:
     def __init__(self, broker):
         self.broker = broker
+        self.last: dict | None = None
         self._pending = False
         ib = broker.ib
         for ev in (ib.accountValueEvent, ib.pnlEvent, ib.updatePortfolioEvent, ib.positionEvent,
@@ -58,7 +66,7 @@ class Portfolio:
                 continue
             exits = [t.order for t in trades if t.contract.conId == p.contract.conId
                      and (t.order.action == "SELL") == (p.position > 0)]
-            stop = next((num(o.auxPrice) for o in exits if o.orderType in ("STP", "STP LMT", "TRAIL")), None)
+            stop = next((stop_price(o) for o in exits if stop_price(o) is not None), None)
             target = next((num(o.lmtPrice) for o in exits if o.orderType == "LMT"), None)
             last = num(p.marketPrice)
             positions.append({
@@ -70,7 +78,9 @@ class Portfolio:
         orders = [{
             "id": t.order.orderId, "perm_id": t.order.permId, "symbol": t.contract.symbol,
             "action": t.order.action, "type": t.order.orderType, "qty": t.order.totalQuantity,
-            "limit": num(t.order.lmtPrice), "stop": num(t.order.auxPrice), "tif": t.order.tif,
+            "limit": num(t.order.lmtPrice) if "LMT" in t.order.orderType else None,
+            "stop": stop_price(t.order),
+            "tif": t.order.tif, "ref": t.order.orderRef,
             "status": t.orderStatus.status, "filled": t.orderStatus.filled, "parent": t.order.parentId,
         } for t in trades]
 
@@ -80,4 +90,5 @@ class Portfolio:
             "commission": num(f.commissionReport.commission) if f.commissionReport else None,
         } for f in sorted(ib.fills(), key=lambda f: f.execution.time, reverse=True)]
 
-        publish("portfolio", {"summary": summary, "positions": positions, "orders": orders, "fills": fills})
+        self.last = {"summary": summary, "positions": positions, "orders": orders, "fills": fills}
+        publish("portfolio", self.last)

@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { api, useStore } from '../ws'
+import { api, ApiError, pushAlert, useStore } from '../ws'
 
 const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmt = (v: number | null | undefined) => (v == null ? '—' : money.format(v))
 const px = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(2))
 const sign = (v: number | null | undefined) => (v == null || v === 0 ? '' : v > 0 ? 'up' : 'down')
 const openChart = (symbol: string) => api('/api/chart', { symbol }).catch(() => {})
+const act = (path: string, body: unknown, done: string) =>
+  api(path, body).then(() => pushAlert('info', done), (e) => pushAlert('error', e instanceof ApiError ? e.message : String(e)))
 
 export function AccountSummary() {
   const s = useStore((st) => st.portfolio?.summary)
@@ -56,7 +58,7 @@ export function PortfolioTabs() {
         ) : tab === 'positions' ? (
           <Table
             empty="No open positions"
-            head={['Symbol', 'Qty', 'Avg', 'Last', 'Value', 'Unrl P/L', 'Stop', 'Target', 'R']}
+            head={['Symbol', 'Qty', 'Avg', 'Last', 'Value', 'Unrl P/L', 'Stop', 'Target', 'R', '']}
             rows={p.positions.map((x) => [
               <button className="link" onClick={() => openChart(x.symbol)}>{x.symbol}</button>,
               <span className={x.qty > 0 ? 'up' : 'down'}>{x.qty}</span>,
@@ -64,18 +66,22 @@ export function PortfolioTabs() {
               <span className={sign(x.unrealized)}>{fmt(x.unrealized)}</span>,
               px(x.stop), px(x.target),
               <span className={sign(x.r)}>{x.r == null ? '—' : `${x.r > 0 ? '+' : ''}${x.r}R`}</span>,
+              <button className="mini" disabled={!confirmed} title="Cancel this symbol's orders and close the position at market"
+                onClick={() => act('/api/flatten', { symbol: x.symbol }, `Flattening ${x.symbol}`)}>Flatten</button>,
             ])}
           />
         ) : tab === 'orders' ? (
           <Table
             empty="No working orders"
-            head={['Id', 'Symbol', 'Side', 'Type', 'Qty', 'Limit', 'Stop', 'TIF', 'Filled', 'Status']}
+            head={['Id', 'Symbol', 'Side', 'Type', 'Qty', 'Limit', 'Stop', 'TIF', 'Filled', 'Status', '']}
             rows={p.orders.map((o) => [
               o.id, <button className="link" onClick={() => openChart(o.symbol)}>{o.symbol}</button>,
               <span className={o.action === 'BUY' ? 'up' : 'down'}>{o.action}</span>,
               o.type, o.qty, px(o.limit), px(o.stop), o.tif, o.filled,
               // Never show an order state IBKR hasn't confirmed on the current connection.
               confirmed ? o.status : <span className="warn-text">UNCONFIRMED</span>,
+              <button className="mini" disabled={!confirmed} title={o.parent ? 'Cancel this exit order' : 'Cancel (an entry also cancels its exits)'}
+                onClick={() => act(`/api/orders/${o.id}/cancel`, {}, `Cancel sent for order ${o.id}`)}>Cancel</button>,
             ])}
           />
         ) : (
