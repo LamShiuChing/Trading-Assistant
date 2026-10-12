@@ -38,6 +38,7 @@ export type Portfolio = {
 }
 type State = {
   ws: 'connecting' | 'open' | 'closed'
+  restarting?: string
   connection?: Connection
   login?: LoginProgress
   chart?: ChartMsg
@@ -72,6 +73,26 @@ export function useStore<T>(select: (s: State) => T): T {
     (f) => (subs.add(f), () => subs.delete(f)),
     () => select(state),
   )
+}
+
+/** Restart the backend (rebuilding the UI if needed), wait for it to come back, then reload the page.
+ *  IB Gateway keeps running, so you stay logged in. */
+export async function restartApp() {
+  set({ restarting: 'Restarting…' })
+  const up = () => fetch('/api/health', { cache: 'no-store' }).then((r) => r.ok, () => false)
+  try {
+    await api('/api/restart', {})
+  } catch (e) {
+    return set({ restarting: undefined })
+  }
+  let sawDown = false
+  for (let i = 0; i < 240; i++) {  // up to 2 min (a UI rebuild takes a few seconds)
+    await new Promise((r) => setTimeout(r, 500))
+    const ok = await up()
+    if (!ok) sawDown = true
+    else if (sawDown) return location.reload()
+  }
+  set({ restarting: 'Restart is taking too long. See %LOCALAPPDATA%\\TradingAssistant\\logs\\backend.err.log' })
 }
 
 export class ApiError extends Error {

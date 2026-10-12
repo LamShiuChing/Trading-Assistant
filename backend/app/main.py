@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import signal
+import subprocess
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -160,6 +161,21 @@ async def quit_app():
         raise HTTPException(409, {"blockers": blockers})
     await gateway.stop()
     asyncio.get_running_loop().call_later(0.5, signal.raise_signal, signal.SIGINT)
+    return {"ok": True}
+
+
+@app.post("/api/restart")
+async def restart():
+    """Restart the backend (and rebuild the UI if its source changed). Gateway keeps running, so no re-login.
+    A detached helper waits for this process to free the port, then starts a fresh one. `uv run` puts us in a
+    Windows job object that kills all children when it exits, so the helper must break away from the job."""
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+         "-File", str(ROOT / "launcher" / "start-backend.ps1")],
+        creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+        close_fds=True,
+    )
+    asyncio.get_running_loop().call_later(0.3, signal.raise_signal, signal.SIGINT)
     return {"ok": True}
 
 

@@ -21,13 +21,8 @@ if ($listening -or (Test-Up)) {
     # the backend kept running, so fall through and reopen the window.
     if ($shell.AppActivate('Trading Assistant')) { exit }
 } else {
-    if (-not (Test-Path "$root\frontend\dist\index.html")) {
-        npm --prefix "$root\frontend" run build | Out-Null
-    }
-    Start-Process uv -ArgumentList 'run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', $port `
-        -WorkingDirectory "$root\backend" -WindowStyle Hidden `
-        -RedirectStandardOutput "$data\logs\backend.out.log" -RedirectStandardError "$data\logs\backend.err.log"
-    $deadline = (Get-Date).AddSeconds(30)
+    & "$PSScriptRoot\start-backend.ps1"
+    $deadline = (Get-Date).AddSeconds(60)  # includes a UI rebuild if sources changed
     while (-not (Test-Up)) {
         if ((Get-Date) -gt $deadline) {
             $shell.Popup("The backend didn't start. See $data\logs\backend.err.log", 0, 'Trading Assistant', 16) | Out-Null

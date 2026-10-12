@@ -3,7 +3,7 @@ import { Boundary } from './Boundary'
 import { Chart } from './panels/Chart'
 import { Login } from './panels/Login'
 import { AccountSummary, PortfolioTabs } from './panels/Portfolio'
-import { api, ApiError, useStore } from './ws'
+import { api, ApiError, restartApp, useStore } from './ws'
 
 const STATE_LABEL = {
   disconnected: 'Disconnected',
@@ -15,6 +15,7 @@ const STATE_LABEL = {
 
 export default function App() {
   const ws = useStore((s) => s.ws)
+  const restarting = useStore((s) => s.restarting)
   const conn = useStore((s) => s.connection)
   const login = useStore((s) => s.login)
   // After a first successful connection, a disconnect shows a banner (daily restart, network)
@@ -23,6 +24,7 @@ export default function App() {
   if (conn?.state === 'ready') wasConnected.current = true
   if (login?.step === 'error' && conn?.state === 'disconnected') wasConnected.current = false
 
+  if (restarting) return <div className="center muted">{restarting} IBKR stays logged in.</div>
   if (ws === 'closed') return <div className="center error-screen">Backend not reachable. Retrying…</div>
   if (!conn) return <div className="center muted">Loading…</div>
 
@@ -88,6 +90,9 @@ function Header() {
       <span className={`pill ${conn.state}`}>{STATE_LABEL[conn.state]}</span>
       {conn.account && <span className="muted">{conn.account}</span>}
       <span className="spacer" />
+      <button onClick={restartApp} title="Restart the app and load the latest code. IBKR stays logged in. (Ctrl+R only reloads the screen.)">
+        Restart
+      </button>
       <button onClick={quit}>Quit</button>
       {quitting && <div className="modal">Shut down. You can close this window.</div>}
       {blockers && (
