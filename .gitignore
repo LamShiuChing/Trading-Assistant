@@ -1,0 +1,8 @@
+.env
+__pycache__/
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+launcher/icon.ico
+.playwright-mcp/
+.remember/

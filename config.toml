@@ -1,0 +1,16 @@
+# Non-secret settings. Secrets (API keys) go in .env, never here.
+
+[app]
+port = 8765
+# LIVE trading needs BOTH this flag AND the LIVE toggle on the login screen.
+allow_live = false
+
+[gateway]
+ibc_path = 'C:\IBC'
+tws_path = 'C:\Jts'
+major_version = "1045"          # folder name under C:\Jts\ibgateway
+command_port = 7462             # IBC command server (STOP etc.), bound to 127.0.0.1
+client_id = 17
+# API ports by mode. Gateway: 4002 paper / 4001 live. TWS: 7497 / 7496.
+paper_port = 4002
+live_port = 4001
