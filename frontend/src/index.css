@@ -127,6 +127,14 @@ th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
 .portfolio-view { grid-template-columns: 300px 1fr; }
 .screener-view { grid-template-columns: 1fr 440px; }
 .signals-view { grid-template-columns: 1fr 520px; }
+.rules { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.rule-row { display: flex; align-items: center; gap: 6px; }
+.rule-row select { max-width: 300px; }
+.rule-row .op { width: 56px; }
+.rule-row .num { width: 80px; }
+.rule-row .x, .rules-btn + .x { background: none; border: 0; color: var(--muted); font-size: 16px; }
+.panel-head .rules-btn { margin-left: auto; }
+.panel-head .rules-btn + .mini { margin-left: 0; }
 .signals, .stats { display: flex; flex-direction: column; min-height: 0; }
 .stats h4 { margin: 12px 0 4px; font-size: 12px; color: var(--muted); }
 .news { display: flex; flex-direction: column; min-height: 0; }

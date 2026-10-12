@@ -13,9 +13,11 @@ from statistics import mean
 
 from ib_async import ScannerSubscription, TagValue
 
+from . import rules as R
 from .config import CFG, DATA
 from .hub import publish
 from .ib import screener_hist
+from .indicators import intraday_indicators
 from .risk import ET
 
 log = logging.getLogger(__name__)
@@ -85,13 +87,13 @@ class Screener:
     def __init__(self, broker, risk):
         self.broker, self.risk = broker, risk
         self.daily: dict[tuple[int, date], dict | None] = {}
-        self.intra: dict[int, tuple[float, float | None]] = {}  # conId -> (fetched monotonic, rvol)
+        self.intra: dict[int, tuple[float, float | None, list]] = {}  # conId -> (fetched, rvol, 5-min bars)
         self.busy = False
         self.rows: list[dict] = []
         self.news = None  # set by main: today's tagged catalyst feeds the score
         if LAST.exists():
             last = json.loads(LAST.read_text())
-            self.rows = last["rows"]
+            self.rows, self.updated = last["rows"], last["updated"]
             publish("screener", last)
 
     def _filters(self) -> list[TagValue]:
@@ -132,15 +134,36 @@ class Screener:
                 f = await self._features(c, t)
                 if f is None:
                     continue
-                total, parts = score(f)
-                rows.append({**f, "score": total, "parts": parts, "fails": check_filters(f)})
-            rows.sort(key=lambda r: (not r["fails"], r["score"]), reverse=True)
-            self.rows = rows
-            payload = {"updated": datetime.now(ET).strftime("%m-%d %H:%M:%S"), "rows": rows}
-            LAST.write_text(json.dumps(payload))
-            publish("screener", payload)
+                rows.append(f)
+            self.publish(rows, datetime.now(ET).strftime("%m-%d %H:%M:%S"))
         finally:
             self.busy = False
+
+    def rank(self, rows: list[dict]) -> list[dict]:
+        """Built-in score + filters, then your rules (required rules add failures, score rules add points)."""
+        rules = R.load()
+        out = []
+        for f in rows:
+            f = {k: v for k, v in f.items() if k not in ("score", "parts", "fails", "rule_hits")}
+            total, parts = score(f)
+            rule_fails, pts, hits = R.apply(f, rules)
+            if rules:
+                parts["rules"] = pts
+            out.append({**f, "score": round(total + pts, 1), "parts": parts,
+                        "fails": check_filters(f) + rule_fails, "rule_hits": hits})
+        out.sort(key=lambda r: (not r["fails"], r["score"]), reverse=True)
+        return out
+
+    def publish(self, rows: list[dict], updated: str) -> None:
+        self.rows = self.rank(rows)
+        self.updated = updated
+        payload = {"updated": updated, "rows": self.rows}
+        LAST.write_text(json.dumps(payload))
+        publish("screener", payload)
+
+    def rescore(self) -> None:
+        """Re-rank the current list after a rule change, without rescanning."""
+        self.publish(self.rows, getattr(self, "updated", ""))
 
     async def _features(self, c, t) -> dict | None:
         ib = self.broker.ib
@@ -154,10 +177,10 @@ class Screener:
         if not d:
             return None
         got = self.intra.get(c.conId)
-        if not got or time.monotonic() - got[0] > 600:  # RVOL refreshed at most every 10 min per symbol
+        if not got or time.monotonic() - got[0] > 300:  # 5-min bars refreshed at most every 5 min per symbol
             await screener_hist.acquire()
             bars = await ib.reqHistoricalDataAsync(c, "", "5 D", "5 mins", "TRADES", useRTH=False)
-            got = (time.monotonic(), rvol(bars, now))
+            got = (time.monotonic(), rvol(bars, now), list(bars))
             self.intra[c.conId] = got
         price = t.marketPrice()
         if not price or math.isnan(price):
@@ -169,6 +192,9 @@ class Screener:
             "change_pct": round((price / d["prev_close"] - 1) * 100, 2),
             "gap_atr": round((price - d["prev_close"]) / d["atr"], 2) if d["atr"] else 0.0,
             "rvol": got[1], "avg_usd_vol": round(d["avg_usd_vol"]), "spread_pct": spread,
+            "avg_usd_vol_m": round(d["avg_usd_vol"] / 1e6, 1),
             "industry": await self.risk.industry_of(c),
-            "catalyst": self.news.catalyst_today(c.symbol) if self.news else None,
+            "catalyst": (cat := self.news.catalyst_today(c.symbol) if self.news else None),
+            "has_catalyst": int(bool(cat)),
+            **intraday_indicators(got[2], now, price, d["atr"]),
         }

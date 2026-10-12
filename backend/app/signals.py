@@ -18,6 +18,7 @@ from . import db
 from .config import CFG
 from .hub import publish
 from .ib import screener_hist
+from .indicators import rsi_series, sma_series
 from .market import analyze
 from .risk import ET
 
@@ -60,40 +61,6 @@ def today_rth(rows: list[dict]) -> list[dict]:
     """Rows of the last row's day, 09:30-16:00."""
     day = rows[-1]["time"] // 86400
     return [r for r in rows if r["time"] // 86400 == day and 570 <= minute(r) < 960]
-
-
-def rsi_series(closes: list[float], n: int = 14) -> list[float | None]:
-    out: list[float | None] = [None] * len(closes)
-    gain = loss = 0.0
-    for i in range(1, len(closes)):
-        ch = closes[i] - closes[i - 1]
-        g, l = max(ch, 0.0), max(-ch, 0.0)
-        if i <= n:
-            gain += g
-            loss += l
-            if i < n:
-                continue
-            gain /= n
-            loss /= n
-        else:
-            gain = (gain * (n - 1) + g) / n
-            loss = (loss * (n - 1) + l) / n
-        out[i] = 100.0 if loss == 0 else 100 - 100 / (1 + gain / loss)
-    return out
-
-
-def sma_series(values: list[float | None], n: int = 14) -> list[float | None]:
-    out: list[float | None] = [None] * len(values)
-    window: list[float] = []
-    for i, v in enumerate(values):
-        if v is None:
-            continue
-        window.append(v)
-        if len(window) > n:
-            window.pop(0)
-        if len(window) == n:
-            out[i] = sum(window) / n
-    return out
 
 
 # ---------- detectors: (rows, levels) -> (stop, note) | None, judged on rows[-1] (a completed bar) ----------

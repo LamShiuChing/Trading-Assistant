@@ -21,6 +21,7 @@ from .orders import Orders
 from .portfolio import Portfolio
 from .risk import RiskManager
 from .news import News
+from . import rules as screener_rules
 from .screener import Screener
 from .signals import SignalEngine
 
@@ -159,6 +160,22 @@ async def sell(req: SellReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "qty": sold}
+
+
+@app.get("/api/screener/rules")
+def get_rules():
+    return {"rules": screener_rules.load(), "fields": screener_rules.FIELDS, "ops": list(screener_rules.OPS)}
+
+
+@app.put("/api/screener/rules")
+async def put_rules(rules: list[dict]):  # async: rescore() pushes over the WebSocket (needs the event loop)
+    """Save your rules and re-rank the current list immediately (no rescan)."""
+    try:
+        saved = screener_rules.save(rules)
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    screener.rescore()
+    return {"rules": saved}
 
 
 @app.post("/api/screener/scan")
