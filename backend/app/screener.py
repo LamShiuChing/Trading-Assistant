@@ -109,7 +109,8 @@ class Screener:
                     await self.scan()
             except Exception:
                 log.exception("scan failed")
-            await asyncio.sleep(S["interval_sec"])
+            # Until connected and the session clock is loaded, check again shortly instead of a full interval.
+            await asyncio.sleep(S["interval_sec"] if self.broker.state == "ready" and self.risk.hours else 2)
 
     async def scan(self) -> None:
         if self.busy:

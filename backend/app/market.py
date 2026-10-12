@@ -95,6 +95,7 @@ class ChartFeed:
         self.broker, self.symbol, self.bars = broker, symbol, None
         self.levels: dict = {}
         self.con_id: int | None = None
+        self.listeners: list = []  # fn(symbol, bars, has_new_bar), e.g. the signal engine
         broker.on_ready.append(self.resubscribe)
 
     async def resubscribe(self) -> None:
@@ -131,6 +132,8 @@ class ChartFeed:
     def _on_update(self, bars, has_new_bar: bool) -> None:
         if bars is not self.bars:
             return
+        for fn in self.listeners:
+            fn(self.symbol, bars, has_new_bar)
         rows, lv = analyze(bars)
         self.levels = lv
         # On a new bar, the previous one was also finalised, so send both.

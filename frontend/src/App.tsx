@@ -5,6 +5,7 @@ import { Login } from './panels/Login'
 import { AccountSummary, PortfolioTabs } from './panels/Portfolio'
 import { NewsPanel } from './panels/News'
 import { ScreenerPanel } from './panels/Screener'
+import { SignalsView } from './panels/Signals'
 import { ConfirmModal, RiskPanel, TicketPanel, usePreview } from './panels/Ticket'
 import { api, ApiError, dismissAlert, pushAlert, restartApp, useStore } from './ws'
 
@@ -61,7 +62,7 @@ export default function App() {
   )
 }
 
-type View = 'trade' | 'screener' | 'portfolio'
+type View = 'trade' | 'screener' | 'signals' | 'portfolio'
 
 function Workspace({ view, setView }: { view: View; setView: (v: View) => void }) {
   const ticket = useStore((s) => s.ticket)
@@ -86,6 +87,7 @@ function Workspace({ view, setView }: { view: View; setView: (v: View) => void }
       </main>
     )
   }
+  if (view === 'signals') return <Boundary name="Signals"><SignalsView onOpen={() => setView('trade')} /></Boundary>
   if (view === 'portfolio') {
     return (
       <main className="workspace portfolio-view">
@@ -163,6 +165,7 @@ async function killSwitch() {
 function Header({ view, setView, showNav }: { view: View; setView: (v: View) => void; showNav: boolean }) {
   const conn = useStore((s) => s.connection)!
   const counts = useStore((s) => s.portfolio && `${s.portfolio.positions.length} pos · ${s.portfolio.orders.length} orders`)
+  const sigCount = useStore((s) => s.signals?.today.length)
   const screenCount = useStore((s) => s.screener?.rows.filter((r) => !r.fails.length).length)
   const [blockers, setBlockers] = useState<string[]>()
   const [quitting, setQuitting] = useState(false)
@@ -187,6 +190,7 @@ function Header({ view, setView, showNav }: { view: View; setView: (v: View) => 
       if (!typing && !e.ctrlKey && !e.altKey && !e.metaKey && !document.querySelector('.modal')) {
         if (e.key.toLowerCase() === 't') setView('trade')
         if (e.key.toLowerCase() === 's') setView('screener')
+        if (e.key.toLowerCase() === 'g') setView('signals')
         if (e.key.toLowerCase() === 'p') setView('portfolio')
       }
     }
@@ -205,6 +209,9 @@ function Header({ view, setView, showNav }: { view: View; setView: (v: View) => 
           <button className={view === 'trade' ? 'on' : ''} onClick={() => setView('trade')} title="Shortcut: T">Trade</button>
           <button className={view === 'screener' ? 'on' : ''} onClick={() => setView('screener')} title="Shortcut: S">
             Screener {screenCount != null && <span className="muted">{screenCount}</span>}
+          </button>
+          <button className={view === 'signals' ? 'on' : ''} onClick={() => setView('signals')} title="Shortcut: G">
+            Signals {sigCount ? <span className="muted">{sigCount}</span> : null}
           </button>
           <button className={view === 'portfolio' ? 'on' : ''} onClick={() => setView('portfolio')} title="Shortcut: P">
             Portfolio {counts && <span className="muted">{counts}</span>}

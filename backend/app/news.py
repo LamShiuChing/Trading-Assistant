@@ -103,7 +103,7 @@ class News:
                     self.publish()
             except Exception:
                 log.exception("news cycle failed")
-            await asyncio.sleep(N["interval_sec"])
+            await asyncio.sleep(N["interval_sec"] if self.broker.state == "ready" else 2)  # start as soon as connected
 
     async def poll(self) -> None:
         ib = self.broker.ib

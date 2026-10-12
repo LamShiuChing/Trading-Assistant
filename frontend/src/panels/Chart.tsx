@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  CandlestickSeries, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart,
-  type IChartApi, type IPriceLine, type ISeriesApi, type ISeriesPrimitive, type SeriesAttachedParameter,
+  CandlestickSeries, CrosshairMode, createSeriesMarkers, HistogramSeries, LineSeries, LineStyle, createChart,
+  type IChartApi, type IPriceLine, type ISeriesMarkersPluginApi, type ISeriesApi, type ISeriesPrimitive, type SeriesAttachedParameter,
   type Time, type UTCTimestamp,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
@@ -149,6 +149,7 @@ type Api = {
   volume: ISeriesApi<'Histogram'>
   rsi: ISeriesApi<'Line'>
   rsiMa: ISeriesApi<'Line'>
+  markers: ISeriesMarkersPluginApi<Time>
   boxes: RangeBoxes
   zones: Zones
   lines: IPriceLine[]
@@ -176,6 +177,7 @@ export function Chart({ preview }: { preview?: Preview }) {
   const olines = useRef<IPriceLine[]>([])
   const olinesKey = useRef('')
   const portfolio = useStore((s) => s.portfolio)
+  const signals = useStore((s) => s.signals?.today)
 
   // Create the chart once.
   useEffect(() => {
@@ -216,7 +218,7 @@ export function Chart({ preview }: { preview?: Preview }) {
       const v = p.seriesData.get(volume) as { value: number } | undefined
       setLegend(c && p.time ? { time: p.time as number, ...c, volume: v?.value ?? 0, vwap: null } : undefined)
     })
-    apiRef.current = { chart, candles, vwap: vw, volume, rsi: rsiSeries, rsiMa, boxes, zones, lines: [] }
+    apiRef.current = { chart, candles, vwap: vw, volume, rsi: rsiSeries, rsiMa, markers: createSeriesMarkers(candles, []), boxes, zones, lines: [] }
     return () => chart.remove()
   }, [])
 
@@ -347,6 +349,23 @@ export function Chart({ preview }: { preview?: Preview }) {
     olines.current = lines.map((l) => a.candles.createPriceLine({ ...l, axisLabelVisible: true }))
     a.zones.set(zones.filter(Boolean) as Zone[])
   }, [portfolio, chartMsg?.symbol])
+
+  // Today's signals for this symbol as arrows under the bar (snapped to the current timeframe).
+  useEffect(() => {
+    const s = tf * 60
+    const mine = (signals ?? []).filter((x) => x.symbol === chartMsg?.symbol)
+    apiRef.current!.markers.setMarkers(mine
+      .map((x) => {
+        const [h, m] = x.time.split(':').map(Number)
+        const last = rows.current.at(-1)
+        if (!last) return null
+        const day = Math.floor(last.time / 86400) * 86400  // signals are today's; chart times are ET wall-clock
+        return { time: t(Math.floor((day + h * 3600 + m * 60) / s) * s), position: 'belowBar' as const,
+                 shape: 'arrowUp' as const, color: '#38bdf8', text: x.setup }
+      })
+      .filter((m): m is NonNullable<typeof m> => m != null)
+      .sort((a, b) => (a.time as number) - (b.time as number)))
+  }, [signals, chartMsg?.symbol, tf])
 
   // Drag the NEW STOP / NEW TP lines with the mouse. The chart's own panning is paused while dragging.
   useEffect(() => {

@@ -22,6 +22,7 @@ from .portfolio import Portfolio
 from .risk import RiskManager
 from .news import News
 from .screener import Screener
+from .signals import SignalEngine
 
 logging.basicConfig(
     filename=DATA / "logs" / "app.log", level=logging.INFO,
@@ -38,7 +39,7 @@ portfolio = Portfolio(broker)
 async def lifespan(app: FastAPI):
     hub.publish("connection", broker.snapshot())
     tasks = [asyncio.create_task(broker.run()), asyncio.create_task(risk.run()), asyncio.create_task(screener.run()),
-             asyncio.create_task(news.run())]
+             asyncio.create_task(news.run()), asyncio.create_task(signals.run())]
     yield
     for t in tasks:
         t.cancel()
@@ -81,6 +82,7 @@ orders = Orders(broker, risk, chart, portfolio)
 screener = Screener(broker, risk)
 news = News(broker, screener, chart, portfolio)
 screener.news = news
+signals = SignalEngine(broker, screener, chart, news, risk)
 
 
 class TicketReq(BaseModel):
