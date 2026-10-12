@@ -4,6 +4,7 @@ Bar times are sent as "ET wall-clock" epoch seconds (UTC epoch + ET offset), bec
 Lightweight Charts has no time-zone support and shows timestamps as UTC.
 """
 import logging
+from bisect import bisect_right
 from datetime import datetime, time, timedelta
 
 from ib_async import Stock
@@ -27,9 +28,10 @@ def _rth(dt: datetime) -> bool:
 
 def analyze(bars) -> tuple[list[dict], dict]:
     """bars: objects with tz-aware ET .date and open/high/low/close/volume/average.
-    Returns chart rows (VWAP anchored at each day's 09:30, None outside RTH) and today's levels."""
+    Returns chart rows (VWAP anchored at each day's 09:30, None outside RTH; RVOL for today) and today's levels."""
     rows, pv, vol, day = [], 0.0, 0.0, None
-    for b in bars:
+    rv = rvol_series(bars)
+    for i, b in enumerate(bars):
         if b.date.date() != day:
             day, pv, vol = b.date.date(), 0.0, 0.0
         vwap = None
@@ -40,8 +42,81 @@ def analyze(bars) -> tuple[list[dict], dict]:
             vol += b.volume
             vwap = round(pv / vol, 4) if vol else None
         rows.append({"time": chart_time(b.date), "open": b.open, "high": b.high, "low": b.low,
-                     "close": b.close, "volume": b.volume, "vwap": vwap})
+                     "close": b.close, "volume": b.volume, "vwap": vwap, "rvol": rv[i]})
     return rows, levels(bars)
+
+
+def rvol_series(bars) -> list[float | None]:
+    """Per bar: today's volume so far vs the average of prior days' volume up to the same minute
+    (pre-market included; same definition as the screener's RVOL). None for earlier days."""
+    if not bars:
+        return []
+    today = bars[-1].date.date()
+    prior: dict = {}  # day -> ([minute of day], [cumulative volume])
+    for b in bars:
+        d = b.date.date()
+        if d != today:
+            mins, cum = prior.setdefault(d, ([], []))
+            mins.append(b.date.hour * 60 + b.date.minute)
+            cum.append((cum[-1] if cum else 0) + b.volume)
+    out: list[float | None] = []
+    so_far = 0.0
+    for b in bars:
+        if b.date.date() != today:
+            out.append(None)
+            continue
+        so_far += b.volume
+        m = b.date.hour * 60 + b.date.minute
+        base = [cum[i] for mins, cum in prior.values() if (i := bisect_right(mins, m) - 1) >= 0 and cum[i] > 0]
+        out.append(round(so_far / (sum(base) / len(base)), 2) if base else None)
+    return out
+
+
+def sr_levels(bars, known: list[float], k: int = 5, per_side: int = 3) -> list[dict]:
+    """Support/resistance from swing pivots on 5-min bars (regular hours of every day, plus today's
+    pre-market): a bar whose high (low) is the extreme of the k bars on each side (k=5: a 25-min swing).
+    Pivots within 0.75x the average 5-min range are one level, at their mean price; a level needs 2+
+    touches. Walking out from the last price, a level is kept only if it is 1.5x that range away from
+    the key levels (`known`: PDH, PMH, ...) and from levels already kept, so lines don't stack up.
+    Returns up to per_side each way: {"price", "touches", "side": "R" | "S"}."""
+    if not bars:
+        return []
+    today = bars[-1].date.date()
+    agg: dict = {}  # (day, 5-min slot) -> [high, low]
+    for b in bars:
+        if _rth(b.date) or (b.date.date() == today and PRE_OPEN <= b.date.time() < RTH_OPEN):
+            key = (b.date.date(), (b.date.hour * 60 + b.date.minute) // 5)
+            a = agg.setdefault(key, [b.high, b.low])
+            a[0], a[1] = max(a[0], b.high), min(a[1], b.low)
+    hl = [agg[key] for key in sorted(agg)]
+    if len(hl) < 2 * k + 1:
+        return []
+    rng = sum(h - l for h, l in hl) / len(hl)
+    piv = []
+    for i in range(k, len(hl) - k):
+        left, right = hl[i - k:i], hl[i + 1:i + k + 1]
+        if hl[i][0] > max(h for h, _ in left) and hl[i][0] >= max(h for h, _ in right):
+            piv.append(hl[i][0])
+        if hl[i][1] < min(l for _, l in left) and hl[i][1] <= min(l for _, l in right):
+            piv.append(hl[i][1])
+    clusters: list[list[float]] = []
+    for p in sorted(piv):
+        if clusters and p - clusters[-1][0] <= 0.75 * rng:
+            clusters[-1].append(p)
+        else:
+            clusters.append([p])
+    last = bars[-1].close
+    found = [(round(sum(c) / len(c), 2), len(c)) for c in clusters if len(c) >= 2]
+    out, taken = [], list(known)
+    for side, cands in (("R", sorted(f for f in found if f[0] > last)),
+                        ("S", sorted((f for f in found if f[0] <= last), reverse=True))):
+        n = 0
+        for price, touches in cands:
+            if n < per_side and all(abs(price - x) > 1.5 * rng for x in taken):
+                out.append({"price": price, "touches": touches, "side": side})
+                taken.append(price)
+                n += 1
+    return out
 
 
 def levels(bars) -> dict:
@@ -64,6 +139,7 @@ def levels(bars) -> dict:
             out[f"or{minutes}"] = {"high": max(b.high for b in rng), "low": min(b.low for b in rng),
                                    "start": chart_time(start), "end": chart_time(end),
                                    "complete": bars[-1].date >= end}
+    out["sr"] = sr_levels(bars, [out[x] for x in ("pdh", "pdl", "pdc", "pmh", "pml") if x in out])
     return out
 
 
@@ -115,7 +191,8 @@ class ChartFeed:
             publish("chart", {"symbol": symbol, "error": f"Unknown symbol {symbol}"})
             return
         self.con_id = contract.conId
-        bars = await ib.reqHistoricalDataAsync(contract, "", "3 D", "1 min", "TRADES",
+        # 5 days: 4 prior days for the RVOL baseline and support/resistance pivots.
+        bars = await ib.reqHistoricalDataAsync(contract, "", "5 D", "1 min", "TRADES",
                                                useRTH=False, keepUpToDate=True)
         if symbol != self.symbol:  # user switched again while this request was in flight
             ib.cancelHistoricalData(bars)

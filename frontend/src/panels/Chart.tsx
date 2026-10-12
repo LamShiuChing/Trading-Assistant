@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  CandlestickSeries, CrosshairMode, createSeriesMarkers, HistogramSeries, LineSeries, LineStyle, createChart,
-  type IChartApi, type IPriceLine, type ISeriesMarkersPluginApi, type ISeriesApi, type ISeriesPrimitive, type SeriesAttachedParameter,
+  CandlestickSeries, CrosshairMode, createSeriesMarkers, HistogramSeries, LineSeries, LineStyle, PriceScaleMode, createChart,
+  type AutoscaleInfo, type IChartApi, type IPriceLine, type ISeriesMarkersPluginApi, type ISeriesApi, type ISeriesPrimitive, type SeriesAttachedParameter,
   type Time, type UTCTimestamp,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
@@ -31,6 +31,7 @@ function aggregate(rows: Row[], tf: number): Row[] {
       b.close = r.close
       b.volume += r.volume
       b.vwap = r.vwap
+      b.rvol = r.rvol  // cumulative, so the bucket's last minute is the bucket's value
     } else out.push({ ...r, time: t })
   }
   return out
@@ -54,6 +55,8 @@ const vwap = (r: Row, next?: Row) =>
   r.vwap == null ? { time: t(r.time) }
   : next && next.vwap == null ? { time: t(r.time), value: r.vwap, color: 'transparent' }
   : { time: t(r.time), value: r.vwap }
+const rvolPt = (r: Row) => (r.rvol == null ? { time: t(r.time) } : { time: t(r.time), value: r.rvol })
+const SR_COLOR = { R: '#fda4af', S: '#5eead4' }
 
 /** Shaded opening-range boxes drawn behind the candles. */
 class RangeBoxes implements ISeriesPrimitive<Time> {
@@ -147,6 +150,7 @@ type Api = {
   candles: ISeriesApi<'Candlestick'>
   vwap: ISeriesApi<'Line'>
   volume: ISeriesApi<'Histogram'>
+  rvol: ISeriesApi<'Line'>
   rsi: ISeriesApi<'Line'>
   rsiMa: ISeriesApi<'Line'>
   markers: ISeriesMarkersPluginApi<Time>
@@ -198,6 +202,19 @@ export function Chart({ preview }: { preview?: Preview }) {
     })
     const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, 1)
     chart.panes()[1].setStretchFactor(0.25)
+    // RVOL over the volume bars: today's volume so far vs the same time on prior days. Log scale, so 2x and
+    // 4x read evenly and an early pre-market spike doesn't flatten the rest of the day. Dotted line = 1x (normal).
+    const rvol = chart.addSeries(LineSeries, {
+      color: '#e879f9', lineWidth: 2, priceScaleId: 'rvol', priceLineVisible: false, lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      autoscaleInfoProvider: (base: () => AutoscaleInfo | null) => {
+        const r = base()
+        const pr = r?.priceRange
+        return pr ? { ...r, priceRange: { minValue: Math.min(pr.minValue, 0.8), maxValue: Math.max(pr.maxValue, 1.25) } } : r
+      },
+    }, 1)
+    rvol.priceScale().applyOptions({ mode: PriceScaleMode.Logarithmic, scaleMargins: { top: 0.1, bottom: 0.05 } })
+    rvol.createPriceLine({ price: 1, color: '#e879f966', lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: '' })
     // RSI(14) in its own pane of the same chart: shares the time axis, scrolling, zoom and crosshair.
     const rsiSeries = chart.addSeries(LineSeries, {
       color: '#a78bfa', lineWidth: 1, priceLineVisible: false, title: 'RSI 14',
@@ -216,9 +233,10 @@ export function Chart({ preview }: { preview?: Preview }) {
     chart.subscribeCrosshairMove((p) => {
       const c = p.seriesData.get(candles) as { open: number; high: number; low: number; close: number } | undefined
       const v = p.seriesData.get(volume) as { value: number } | undefined
-      setLegend(c && p.time ? { time: p.time as number, ...c, volume: v?.value ?? 0, vwap: null } : undefined)
+      const rv = p.seriesData.get(rvol) as { value?: number } | undefined
+      setLegend(c && p.time ? { time: p.time as number, ...c, volume: v?.value ?? 0, vwap: null, rvol: rv?.value } : undefined)
     })
-    apiRef.current = { chart, candles, vwap: vw, volume, rsi: rsiSeries, rsiMa, markers: createSeriesMarkers(candles, []), boxes, zones, lines: [] }
+    apiRef.current = { chart, candles, vwap: vw, volume, rvol, rsi: rsiSeries, rsiMa, markers: createSeriesMarkers(candles, []), boxes, zones, lines: [] }
     return () => chart.remove()
   }, [])
 
@@ -231,6 +249,12 @@ export function Chart({ preview }: { preview?: Preview }) {
         price: lv[l.key] as number, color: l.color, lineStyle: l.style, lineWidth: 1, title: l.title, axisLabelVisible: true,
       }),
     )
+    // Auto support / resistance: repeated swing highs/lows (see market.sr_levels). "R 3x" = 3 touches.
+    for (const s of lv.sr ?? [])
+      a.lines.push(a.candles.createPriceLine({
+        price: s.price, color: SR_COLOR[s.side], lineStyle: LineStyle.LargeDashed, lineWidth: 1,
+        title: `${s.side} ${s.touches}x`, axisLabelVisible: true,
+      }))
     a.boxes.set(
       [lv.or15 && { range: lv.or15, color: '#38bdf8' }, lv.or5 && { range: lv.or5, color: '#f472b6' }].filter(Boolean) as {
         range: Range; color: string
@@ -245,6 +269,7 @@ export function Chart({ preview }: { preview?: Preview }) {
     a.candles.setData(data.map(candle))
     a.vwap.setData(data.map((r, i) => vwap(r, data[i + 1])))
     a.volume.setData(data.map(vol))
+    a.rvol.setData(data.map(rvolPt))
     a.rsi.setData(rsiPoints(data))
     a.rsiMa.setData(rsiMaPoints(data))
     drawLevels(tfNow)
@@ -279,6 +304,7 @@ export function Chart({ preview }: { preview?: Preview }) {
       a.candles.update(candle(b))
       a.vwap.update(vwap(b, tail[i + 1]))
       a.volume.update(vol(b))
+      a.rvol.update(rvolPt(b))
     })
     // RSI depends on all history: recompute over the full series, redraw only the newest point(s).
     const full = aggregate(rs, tf)
@@ -451,10 +477,14 @@ export function Chart({ preview }: { preview?: Preview }) {
           <span className="legend">
             O <b>{shown.open.toFixed(2)}</b> H <b>{shown.high.toFixed(2)}</b> L <b>{shown.low.toFixed(2)}</b> C{' '}
             <b className={shown.close >= shown.open ? 'up' : 'down'}>{shown.close.toFixed(2)}</b> V <b>{fmtVol(shown.volume)}</b>
+            {shown.rvol != null && <> RVOL <b style={{ color: shown.rvol >= 2 ? '#e879f9' : undefined }}>{shown.rvol.toFixed(1)}x</b></>}
           </span>
         )}
         <span className="legend keys">
-          <i style={{ color: '#f59e0b' }}>VWAP</i> <i style={{ color: '#f472b6' }}>OR5</i> <i style={{ color: '#38bdf8' }}>OR15</i>
+          <i style={{ color: '#f59e0b' }}>VWAP</i> <i style={{ color: '#f472b6' }}>OR5</i> <i style={{ color: '#38bdf8' }}>OR15</i>{' '}
+          <i style={{ color: SR_COLOR.S }} title="Support: repeated swing lows/highs below price">S</i>{' '}
+          <i style={{ color: SR_COLOR.R }} title="Resistance: repeated swing highs/lows above price">R</i>{' '}
+          <i style={{ color: '#e879f9' }} title="Relative volume vs the same time on the prior 4 days (volume pane)">RVOL</i>
         </span>
       </div>
       <div className="chart-canvas" ref={el}>

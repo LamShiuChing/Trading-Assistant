@@ -13,9 +13,10 @@ export type LoginProgress = {
   code?: string
   message?: string
 }
-export type Row = { time: number; open: number; high: number; low: number; close: number; volume: number; vwap: number | null }
+export type Row = { time: number; open: number; high: number; low: number; close: number; volume: number; vwap: number | null; rvol?: number | null }
 export type Range = { high: number; low: number; start: number; end: number; complete: boolean }
-export type Levels = { pdh?: number; pdl?: number; pdc?: number; pmh?: number; pml?: number; or5?: Range; or15?: Range }
+export type Levels = { pdh?: number; pdl?: number; pdc?: number; pmh?: number; pml?: number; or5?: Range; or15?: Range
+  sr?: { price: number; touches: number; side: 'R' | 'S' }[] }
 export type ChartMsg = { symbol: string; loading?: boolean; error?: string; bars?: Row[]; levels?: Levels }
 export type BarMsg = { symbol: string; rows: Row[]; levels: Levels }
 export type Position = {
