@@ -140,9 +140,10 @@ class News:
                 messages=[{"role": "user", "content": listing}],
                 output_config={"effort": "low"},  # simple classification
                 output_format=Tags,
-                # Refusal fallback: if a safety classifier declines, the API re-runs on a fallback model.
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
+                # Refusal fallback (re-run on a fallback model if a safety classifier declines) exists for
+                # Opus/Fable/Sonnet, not Haiku 5.5. On Haiku a refused batch just stays untagged and retries.
+                **({} if N["model"].startswith("claude-haiku") else
+                   {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}),
             )
         except anthropic.AuthenticationError:
             self.tagger_error = "Anthropic API key in .env was rejected"
