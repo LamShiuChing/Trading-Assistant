@@ -19,12 +19,13 @@ export type Levels = { pdh?: number; pdl?: number; pdc?: number; pmh?: number; p
 export type ChartMsg = { symbol: string; loading?: boolean; error?: string; bars?: Row[]; levels?: Levels }
 export type BarMsg = { symbol: string; rows: Row[]; levels: Levels }
 export type Position = {
-  symbol: string; qty: number; avg: number | null; last: number | null; value: number | null
+  symbol: string; qty: number; avg: number | null; avg_src: 'fills' | 'ibkr'; avg_cost: number | null
+  last: number | null; value: number | null
   unrealized: number | null; realized: number | null; stop: number | null; target: number | null; r: number | null
 }
 export type Order = {
   id: number; perm_id: number; symbol: string; action: string; type: string; qty: number
-  limit: number | null; stop: number | null; tif: string; status: string; filled: number; parent: number
+  limit: number | null; stop: number | null; tif: string; status: string; filled: number; parent: number; ref: string
 }
 export type Fill = { time: string; symbol: string; side: string; qty: number; price: number; commission: number | null }
 export type Portfolio = {

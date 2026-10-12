@@ -19,6 +19,27 @@ def stop_price(o) -> float | None:
     return num(o.auxPrice) if o.orderType in ("STP", "STP LMT") else None
 
 
+def fill_avg(fills: list[tuple[str, float, float]], position: float) -> float | None:
+    """Average fill price (no commissions) of the current position, rebuilt from fills in time order.
+    fills: (side 'BOT'/'SLD', shares, price). Adding to a position re-averages; reducing it keeps the average;
+    crossing zero starts a new average at that fill. Returns None if the fills don't add up to the position
+    (part of it was opened before these fills, e.g. on an earlier day): then IBKR's average cost is used."""
+    qty, avg = 0.0, 0.0
+    for side, shares, price in fills:
+        d = shares if side == "BOT" else -shares
+        if qty == 0 or (qty > 0) == (d > 0):            # open or add
+            avg = (avg * abs(qty) + price * abs(d)) / (abs(qty) + abs(d))
+            qty += d
+        elif abs(d) <= abs(qty):                          # reduce (average unchanged)
+            qty += d
+            if qty == 0:
+                avg = 0.0
+        else:                                             # flip through zero
+            qty += d
+            avg = price
+    return round(avg, 4) if qty and abs(qty - position) < 1e-9 else None
+
+
 def current_r(qty: float, avg: float, last: float | None, stop: float | None) -> float | None:
     """Open profit in R, where 1R = distance from entry to the working stop."""
     if not (qty and last and stop) or avg == stop:
@@ -60,6 +81,10 @@ class Portfolio:
             summary.update(day_pnl=num(pnl.dailyPnL), unrealized=num(pnl.unrealizedPnL), realized=num(pnl.realizedPnL))
 
         trades = ib.openTrades()
+        by_symbol: dict[int, list] = {}
+        for f in sorted(ib.fills(), key=lambda f: f.execution.time):
+            if f.execution.acctNumber == acct:
+                by_symbol.setdefault(f.contract.conId, []).append((f.execution.side, f.execution.shares, f.execution.price))
         positions = []
         for p in ib.portfolio(acct):
             if not p.position:
@@ -69,10 +94,16 @@ class Portfolio:
             stop = next((stop_price(o) for o in exits if stop_price(o) is not None), None)
             target = next((num(o.lmtPrice) for o in exits if o.orderType == "LMT"), None)
             last = num(p.marketPrice)
+            # Fill-based average (no commission) when today's fills explain the whole position; else IBKR's
+            # averageCost, which includes commissions.
+            avg = fill_avg(by_symbol.get(p.contract.conId, []), p.position)
+            avg_src = "fills" if avg is not None else "ibkr"
+            avg = avg if avg is not None else num(p.averageCost)
             positions.append({
-                "symbol": p.contract.symbol, "qty": p.position, "avg": num(p.averageCost), "last": last,
+                "symbol": p.contract.symbol, "qty": p.position, "avg": avg, "avg_src": avg_src,
+                "avg_cost": num(p.averageCost), "last": last,
                 "value": num(p.marketValue), "unrealized": num(p.unrealizedPNL), "realized": num(p.realizedPNL),
-                "stop": stop, "target": target, "r": current_r(p.position, p.averageCost, last, stop),
+                "stop": stop, "target": target, "r": current_r(p.position, avg, last, stop),
             })
 
         orders = [{

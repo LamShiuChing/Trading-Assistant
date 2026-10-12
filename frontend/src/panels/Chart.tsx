@@ -126,6 +126,9 @@ export function Chart({ preview }: { preview?: Preview }) {
   const ticketRef = useRef<Ticket>(undefined)
   ticketRef.current = ticket
   const tlines = useRef<Partial<Record<LineKey, IPriceLine>>>({})
+  const olines = useRef<IPriceLine[]>([])
+  const olinesKey = useRef('')
+  const portfolio = useStore((s) => s.portfolio)
 
   // Create the chart once.
   useEffect(() => {
@@ -235,6 +238,33 @@ export function Chart({ preview }: { preview?: Preview }) {
     const tgt = ticket.target ?? preview?.target
     if (tgt != null) tlines.current.target = mk(tgt, '#22c55e', `TARGET ${preview?.rr ? preview.rr + 'R' : ''}`)
   }, [ticket, preview, chartMsg?.symbol])
+
+  // Your position and working orders on this symbol, as dashed lines (read-only).
+  useEffect(() => {
+    const a = apiRef.current!
+    const sym = chartMsg?.symbol
+    const lines: { price: number; color: string; title: string; style: LineStyle }[] = []
+    for (const p of portfolio?.positions ?? []) {
+      if (p.symbol === sym && p.avg != null)
+        lines.push({ price: p.avg, color: '#e5e7eb', style: LineStyle.Dashed,
+                     title: `POS ${p.qty > 0 ? '+' : ''}${p.qty}${p.r != null ? ` ${p.r > 0 ? '+' : ''}${p.r}R` : ''}` })
+    }
+    for (const o of portfolio?.orders ?? []) {
+      if (o.symbol !== sym) continue
+      const left = o.qty - o.filled
+      if (o.stop != null)
+        lines.push({ price: o.stop, color: '#ef4444', style: LineStyle.LargeDashed, title: `${o.type === 'TRAIL' ? 'TRAIL' : 'STOP'} ${left}` })
+      else if (o.limit != null)
+        lines.push(o.parent
+          ? { price: o.limit, color: '#22c55e', style: LineStyle.LargeDashed, title: `TP ${left}` }
+          : { price: o.limit, color: '#3b82f6', style: LineStyle.LargeDashed, title: `${o.action} ${left} LMT` })
+    }
+    const key = JSON.stringify(lines)
+    if (key === olinesKey.current) return  // portfolio pushes ~3/s; only redraw when something changed
+    olinesKey.current = key
+    olines.current.forEach((l) => a.candles.removePriceLine(l))
+    olines.current = lines.map((l) => a.candles.createPriceLine({ ...l, lineWidth: 1, axisLabelVisible: true }))
+  }, [portfolio, chartMsg?.symbol])
 
   // Drag those lines with the mouse. The chart's own panning is paused while dragging.
   useEffect(() => {

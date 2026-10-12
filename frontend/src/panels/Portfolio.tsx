@@ -62,7 +62,12 @@ export function PortfolioTabs() {
             rows={p.positions.map((x) => [
               <button className="link" onClick={() => openChart(x.symbol)}>{x.symbol}</button>,
               <span className={x.qty > 0 ? 'up' : 'down'}>{x.qty}</span>,
-              px(x.avg), px(x.last), fmt(x.value),
+              <span title={x.avg_src === 'fills'
+                ? `Average fill price from today's fills (no commission). IBKR average cost incl. commission: ${px(x.avg_cost)}`
+                : "IBKR average cost (includes commission). Part of this position is older than today's fills."}>
+                {px(x.avg)}{x.avg_src === 'ibkr' && <sup className="muted">*</sup>}
+              </span>,
+              px(x.last), fmt(x.value),
               <span className={sign(x.unrealized)}>{fmt(x.unrealized)}</span>,
               px(x.stop), px(x.target),
               <span className={sign(x.r)}>{x.r == null ? '—' : `${x.r > 0 ? '+' : ''}${x.r}R`}</span>,

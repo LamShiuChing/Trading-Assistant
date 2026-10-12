@@ -19,6 +19,7 @@ export default function App() {
   const restarting = useStore((s) => s.restarting)
   const conn = useStore((s) => s.connection)
   const login = useStore((s) => s.login)
+  const [view, setView] = useState<View>('trade')
   // After a first successful connection, a disconnect shows a banner (daily restart, network)
   // instead of bouncing back to the login screen. If Gateway exits, we go back to login.
   const wasConnected = useRef(false)
@@ -32,7 +33,7 @@ export default function App() {
   const showLogin = conn.state === 'disconnected' && !wasConnected.current
   return (
     <div className="app">
-      <Header />
+      <Header view={view} setView={setView} showNav={!showLogin} />
       {conn.blocked_live && (
         <div className="banner live">
           A LIVE Gateway is running, but allow_live = false in config.toml. The app won't connect to it.
@@ -51,14 +52,16 @@ export default function App() {
       {showLogin ? (
         <Login />
       ) : (
-        <Workspace />
+        <Workspace view={view} />
       )}
       <Alerts />
     </div>
   )
 }
 
-function Workspace() {
+type View = 'trade' | 'portfolio'
+
+function Workspace({ view }: { view: View }) {
   const ticket = useStore((s) => s.ticket)
   const { preview, error } = usePreview(ticket)
   const [staged, setStaged] = useState(false)
@@ -73,6 +76,17 @@ function Workspace() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  if (view === 'portfolio') {
+    return (
+      <main className="workspace portfolio-view">
+        <div className="right">
+          <Boundary name="Account"><AccountSummary /></Boundary>
+          <Boundary name="Risk"><RiskPanel /></Boundary>
+        </div>
+        <Boundary name="Portfolio"><PortfolioTabs /></Boundary>
+      </main>
+    )
+  }
   return (
     <main className="workspace">
       <Boundary name="Chart"><Chart preview={preview} /></Boundary>
@@ -81,7 +95,6 @@ function Workspace() {
         <Boundary name="Ticket"><TicketPanel preview={preview} error={error} onStage={stage} /></Boundary>
         <Boundary name="Risk"><RiskPanel /></Boundary>
       </div>
-      <Boundary name="Portfolio"><PortfolioTabs /></Boundary>
       {staged && preview && <ConfirmModal preview={preview} onClose={() => setStaged(false)} />}
     </main>
   )
@@ -115,8 +128,9 @@ async function killSwitch() {
   }
 }
 
-function Header() {
+function Header({ view, setView, showNav }: { view: View; setView: (v: View) => void; showNav: boolean }) {
   const conn = useStore((s) => s.connection)!
+  const counts = useStore((s) => s.portfolio && `${s.portfolio.positions.length} pos · ${s.portfolio.orders.length} orders`)
   const [blockers, setBlockers] = useState<string[]>()
   const [quitting, setQuitting] = useState(false)
 
@@ -136,6 +150,11 @@ function Header() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setBlockers(undefined)
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'k') (e.preventDefault(), killSwitch())
+      const typing = (e.target as HTMLElement).closest('input, textarea, select')
+      if (!typing && !e.ctrlKey && !e.altKey && !e.metaKey && !document.querySelector('.modal')) {
+        if (e.key.toLowerCase() === 't') setView('trade')
+        if (e.key.toLowerCase() === 'p') setView('portfolio')
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -147,6 +166,14 @@ function Header() {
       {conn.mode && <span className={`badge ${conn.mode}`}>{conn.mode.toUpperCase()}</span>}
       <span className={`pill ${conn.state}`}>{STATE_LABEL[conn.state]}</span>
       {conn.account && <span className="muted">{conn.account}</span>}
+      {showNav && (
+        <nav className="seg small views">
+          <button className={view === 'trade' ? 'on' : ''} onClick={() => setView('trade')} title="Shortcut: T">Trade</button>
+          <button className={view === 'portfolio' ? 'on' : ''} onClick={() => setView('portfolio')} title="Shortcut: P">
+            Portfolio {counts && <span className="muted">{counts}</span>}
+          </button>
+        </nav>
+      )}
       <span className="spacer" />
       <button className="kill" onClick={killSwitch} disabled={conn.state !== 'ready' && conn.state !== 'degraded'}
         title="Cancel ALL orders and close ALL positions now (Ctrl+Shift+K)">

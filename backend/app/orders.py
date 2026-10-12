@@ -1,7 +1,9 @@
 """Order ticket: stage (preview with size, $ risk, R:R and every risk check) -> confirm -> bracket.
 
-Bracket = entry LMT (parent) + STP exit + optional LMT target + optional MKT exit at flatten time
-(IBKR-side force-flat backup). The exits share one OCA group, so one fill cancels the others.
+Bracket = entry LMT (parent) + STP exit + optional LMT target + optional MKT exit after flatten time
+(IBKR-side force-flat backup). The exits share one OCA group of type 2: a fill on one shrinks the
+others by the same amount (a full fill cancels them), so a partial target fill keeps the rest protected.
+If the position shrinks some other way (sold in TWS/mobile), sync_exits shrinks the exits to match.
 Every order carries orderRef "TA<journal id>" so fills can be matched to the journal.
 """
 import asyncio
@@ -30,6 +32,9 @@ class Orders:
         self.previews: dict[str, tuple[float, dict]] = {}
         risk.flatten_all = self.flatten_all
         broker.ib.orderStatusEvent += self._on_status
+        broker.ib.positionEvent += self._schedule_sync
+        broker.ib.execDetailsEvent += self._schedule_sync
+        self._sync_pending = False
 
     # ---------- stage ----------
 
@@ -104,7 +109,9 @@ class Orders:
 
         parent = LimitOrder(p["side"], p["qty"], p["entry"], orderId=ib.client.getReqId(),
                             tif="DAY", orderRef=ref, transmit=False)
-        exits_common = dict(parentId=parent.orderId, tif="DAY", orderRef=ref, ocaGroup=oca, ocaType=1, transmit=False)
+        # ocaType 2: remaining orders are proportionately reduced, with overfill protection ("block").
+        # https://interactivebrokers.github.io/tws-api/oca.html
+        exits_common = dict(parentId=parent.orderId, tif="DAY", orderRef=ref, ocaGroup=oca, ocaType=2, transmit=False)
         stop = Order(action=exit_side, orderType="STP", totalQuantity=p["qty"], auxPrice=p["stop"],
                      orderId=ib.client.getReqId(), **exits_common)
         if p["trail"]:
@@ -151,6 +158,33 @@ class Orders:
             db.conn.execute("UPDATE trades SET status='filled' WHERE parent_id=? AND status!='filled'", (o.orderId,))
         elif st.status in ("Cancelled", "ApiCancelled", "Inactive"):
             db.conn.execute("UPDATE trades SET status='cancelled' WHERE parent_id=? AND status='submitted'", (o.orderId,))
+
+    # ---------- keep exits no bigger than the position ----------
+
+    def _schedule_sync(self, *_):
+        if not self._sync_pending:
+            self._sync_pending = True
+            asyncio.get_running_loop().call_later(1.0, self.sync_exits)
+
+    def sync_exits(self) -> None:
+        """Shrink or cancel bracket exits so they never exceed the position (selling more than you hold would
+        open a short). Only touches brackets whose entry has filled. Only ever reduces, never increases."""
+        self._sync_pending = False
+        ib = self.broker.ib
+        if self.broker.state != "ready":
+            return
+        trades = ib.openTrades()
+        held = {p.contract.conId: p.position for p in ib.positions() if p.account == self.broker.account}
+        for con_id, plan in plan_exit_sizes(trades, held).items():
+            for t, qty in plan:
+                if qty == 0:
+                    log.warning("sync_exits: cancel %s %s %s (position gone)", t.contract.symbol, t.order.orderType, t.order.orderRef)
+                    ib.cancelOrder(t.order)
+                else:
+                    log.warning("sync_exits: %s %s %s qty %g -> %g", t.contract.symbol, t.order.orderType,
+                                t.order.orderRef, t.order.totalQuantity, qty)
+                    t.order.totalQuantity = qty
+                    ib.placeOrder(t.contract, t.order)  # same orderId = modify
 
     # ---------- cancel / flatten / kill ----------
 
@@ -212,3 +246,39 @@ class Orders:
                                else f"still open: {', '.join(left + working)}")
         publish("alert", {"level": "info" if not left else "error", "message": msg})
         return {"positions_left": left, "orders_left": working}
+
+
+def plan_exit_sizes(trades, held: dict) -> dict:
+    """Pure: which bracket exit orders to shrink (or cancel, qty 0) so their total per symbol fits the position.
+    Each bracket's exits are one OCA group and protect the same shares, so a group counts once, at its size.
+    Oldest brackets keep their size first; newer ones give way. Returns {conId: [(trade, new_qty)]}."""
+    by_id = {t.order.orderId: t for t in trades}
+    groups: dict[tuple, list] = {}
+    for t in trades:
+        o = t.order
+        if not (o.orderRef.startswith("TA") and o.parentId and o.ocaGroup):
+            continue
+        parent = by_id.get(o.parentId)
+        if parent is not None and parent.orderStatus.status not in ("Filled",):
+            continue  # entry still working: its exits are dormant children
+        groups.setdefault((t.contract.conId, o.ocaGroup), []).append(t)
+    out: dict = {}
+    for con_id in {k[0] for k in groups}:
+        # Oldest first by journal number (TA9 before TA10, so not a text sort).
+        mine = sorted(((k, v) for k, v in groups.items() if k[0] == con_id),
+                      key=lambda kv: int(kv[0][1][2:].split("-")[0]))
+        pos = held.get(con_id, 0)
+        left = 0.0
+        for _, g in mine:
+            exit_side = g[0].order.action
+            # Shares this group may close: only shares on the side it exits (SELL exits close a long).
+            left = abs(pos) if (pos > 0 and exit_side == "SELL") or (pos < 0 and exit_side == "BUY") else 0.0
+            break
+        for _, g in mine:
+            size = max(t.order.totalQuantity - t.orderStatus.filled for t in g)
+            want = min(size, left)
+            left -= want
+            if want < size:
+                out.setdefault(con_id, []).extend(
+                    (t, 0 if want == 0 else want + t.orderStatus.filled) for t in g)
+    return out

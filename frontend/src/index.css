@@ -123,9 +123,13 @@ td { text-align: right; padding: 3px 10px; border-bottom: 1px solid #1a1f27; whi
 th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
 
 /* Phase 2: right column, ticket, risk, kill switch, alerts */
-.workspace { grid-template-columns: 1fr 300px; }
-.right { display: flex; flex-direction: column; gap: 1px; background: var(--line); overflow-y: auto; }
-.right > * { background: var(--bg); }
+.workspace { grid-template-columns: 1fr 300px; grid-template-rows: 1fr; }
+.portfolio-view { grid-template-columns: 300px 1fr; }
+.portfolio-view .bottom { grid-column: auto; }
+.views { margin-left: 12px; }
+.views button { white-space: nowrap; }
+.right { display: flex; flex-direction: column; overflow-y: auto; }
+.right > * { border-bottom: 1px solid var(--line); }
 .small { font-size: 12px; }
 kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: inherit; background: var(--panel); }
 select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 6px; }
