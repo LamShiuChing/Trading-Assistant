@@ -3,6 +3,7 @@ import { Boundary } from './Boundary'
 import { Chart } from './panels/Chart'
 import { Login } from './panels/Login'
 import { AccountSummary, PortfolioTabs } from './panels/Portfolio'
+import { ScreenerPanel } from './panels/Screener'
 import { ConfirmModal, RiskPanel, TicketPanel, usePreview } from './panels/Ticket'
 import { api, ApiError, dismissAlert, pushAlert, restartApp, useStore } from './ws'
 
@@ -88,7 +89,8 @@ function Workspace({ view }: { view: View }) {
     )
   }
   return (
-    <main className="workspace">
+    <main className="workspace trade-view">
+      <Boundary name="Screener"><ScreenerPanel /></Boundary>
       <Boundary name="Chart"><Chart preview={preview} /></Boundary>
       <div className="right">
         <Boundary name="Account"><AccountSummary /></Boundary>

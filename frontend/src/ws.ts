@@ -67,6 +67,7 @@ type State = {
   chart?: ChartMsg
   bar?: BarMsg
   portfolio?: Portfolio
+  screener?: { updated: string; rows: import('./panels/Screener').ScreenRow[] }
 }
 
 let state: State = { ws: 'connecting', alerts: [] }

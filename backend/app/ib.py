@@ -6,6 +6,8 @@ Request pacing: ib_async throttles itself (Client.MaxRequests=45 per 1 s), under
 """
 import asyncio
 import logging
+import time
+from collections import deque
 
 from ib_async import IB
 
@@ -15,6 +17,28 @@ from .hub import publish
 log = logging.getLogger(__name__)
 G = CFG["gateway"]
 PORTS = {"paper": G["paper_port"], "live": G["live_port"]}
+
+
+class HistLimiter:
+    """Sliding-window cap on historical-data requests. IBKR pacing rules are reported as ~60 requests per
+    10 minutes (third-party sources; IBKR's page wasn't reachable), so stay well under that."""
+
+    def __init__(self, max_requests: int, window_s: float):
+        self.max, self.window, self.times = max_requests, window_s, deque()
+
+    async def acquire(self) -> None:
+        while True:
+            now = time.monotonic()
+            while self.times and now - self.times[0] > self.window:
+                self.times.popleft()
+            if len(self.times) < self.max:
+                self.times.append(now)
+                return
+            await asyncio.sleep(self.window - (now - self.times[0]) + 0.5)
+
+
+# The screener gets its own budget so it can never starve chart loads (which are rare, user-driven).
+screener_hist = HistLimiter(40, 600)
 
 
 async def port_open(port: int) -> bool:

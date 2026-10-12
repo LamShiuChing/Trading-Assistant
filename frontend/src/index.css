@@ -125,6 +125,23 @@ th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
 /* Phase 2: right column, ticket, risk, kill switch, alerts */
 .workspace { grid-template-columns: 1fr 300px; grid-template-rows: 1fr; }
 .portfolio-view { grid-template-columns: 300px 1fr; }
+.trade-view { grid-template-columns: 290px 1fr 300px; }
+.screener { display: flex; flex-direction: column; min-height: 0; }
+.panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.panel-head h3 { margin: 0; font-size: 13px; }
+.panel-head .mini { margin-left: auto; }
+table.screen td, table.screen th { padding: 4px 6px; }
+table.screen tbody tr { cursor: pointer; }
+table.screen tbody tr:hover { background: #1a2029; }
+table.screen tr.sel { background: #1c2533; }
+table.screen tr.dim td { opacity: 0.55; }
+table.screen tr.detail { cursor: default; background: var(--panel); }
+table.screen tr.detail td { text-align: left; white-space: normal; }
+.score { display: inline-block; min-width: 22px; font-weight: 600; }
+.partbar { display: inline-flex; width: 40px; height: 5px; margin-left: 4px; background: var(--line); vertical-align: middle; overflow: hidden; border-radius: 2px; }
+.partbar i { display: block; height: 100%; }
+.parts { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 4px; font-size: 12px; }
+.parts i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
 .portfolio-view .bottom { grid-column: auto; }
 .views { margin-left: 12px; }
 .views button { white-space: nowrap; }

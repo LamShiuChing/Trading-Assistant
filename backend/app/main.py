@@ -19,6 +19,7 @@ from .market import ChartFeed
 from .orders import Orders
 from .portfolio import Portfolio
 from .risk import RiskManager
+from .screener import Screener
 
 logging.basicConfig(
     filename=DATA / "logs" / "app.log", level=logging.INFO,
@@ -34,7 +35,7 @@ portfolio = Portfolio(broker)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     hub.publish("connection", broker.snapshot())
-    tasks = [asyncio.create_task(broker.run()), asyncio.create_task(risk.run())]
+    tasks = [asyncio.create_task(broker.run()), asyncio.create_task(risk.run()), asyncio.create_task(screener.run())]
     yield
     for t in tasks:
         t.cancel()
@@ -74,6 +75,7 @@ def _save_setting(**kw) -> None:
 chart = ChartFeed(broker, _settings().get("symbol", "SPY"))
 risk = RiskManager(broker, portfolio)
 orders = Orders(broker, risk, chart, portfolio)
+screener = Screener(broker, risk)
 
 
 class TicketReq(BaseModel):
@@ -150,6 +152,13 @@ async def sell(req: SellReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "qty": sold}
+
+
+@app.post("/api/screener/scan")
+async def rescan():
+    _need_connection()
+    await screener.scan()
+    return {"ok": True}
 
 
 @app.post("/api/kill")
