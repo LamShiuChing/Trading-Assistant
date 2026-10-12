@@ -40,6 +40,26 @@ def fill_avg(fills: list[tuple[str, float, float]], position: float) -> float | 
     return round(avg, 4) if qty and abs(qty - position) < 1e-9 else None
 
 
+def target_of(o) -> float | None:
+    """Take-profit price of an exit order: LMT limit or MIT trigger."""
+    if o.orderType == "LMT":
+        return num(o.lmtPrice)
+    return num(o.auxPrice) if o.orderType == "MIT" else None
+
+
+def order_kind(o) -> str:
+    """entry / stop / target / backup (MKT exit at force-flat time) / flatten / other."""
+    if o.orderRef in ("TA-flatten", "TA-sell"):
+        return "sell"
+    if o.parentId == 0 and o.action == "BUY":
+        return "entry"
+    if stop_price(o) is not None:
+        return "stop"
+    if target_of(o) is not None:
+        return "target"
+    return "backup" if o.orderType == "MKT" and o.goodAfterTime else "other"
+
+
 def current_r(qty: float, avg: float, last: float | None, stop: float | None) -> float | None:
     """Open profit in R, where 1R = distance from entry to the working stop."""
     if not (qty and last and stop) or avg == stop:
@@ -92,7 +112,7 @@ class Portfolio:
             exits = [t.order for t in trades if t.contract.conId == p.contract.conId
                      and (t.order.action == "SELL") == (p.position > 0)]
             stop = next((stop_price(o) for o in exits if stop_price(o) is not None), None)
-            target = next((num(o.lmtPrice) for o in exits if o.orderType == "LMT"), None)
+            target = next((target_of(o) for o in exits if target_of(o) is not None), None)
             last = num(p.marketPrice)
             # Fill-based average (no commission) when today's fills explain the whole position; else IBKR's
             # averageCost, which includes commissions.
@@ -100,7 +120,7 @@ class Portfolio:
             avg_src = "fills" if avg is not None else "ibkr"
             avg = avg if avg is not None else num(p.averageCost)
             positions.append({
-                "symbol": p.contract.symbol, "qty": p.position, "avg": avg, "avg_src": avg_src,
+                "symbol": p.contract.symbol, "conId": p.contract.conId, "qty": p.position, "avg": avg, "avg_src": avg_src,
                 "avg_cost": num(p.averageCost), "last": last,
                 "value": num(p.marketValue), "unrealized": num(p.unrealizedPNL), "realized": num(p.realizedPNL),
                 "stop": stop, "target": target, "r": current_r(p.position, avg, last, stop),
@@ -109,8 +129,8 @@ class Portfolio:
         orders = [{
             "id": t.order.orderId, "perm_id": t.order.permId, "symbol": t.contract.symbol,
             "action": t.order.action, "type": t.order.orderType, "qty": t.order.totalQuantity,
-            "limit": num(t.order.lmtPrice) if "LMT" in t.order.orderType else None,
-            "stop": stop_price(t.order),
+            "kind": order_kind(t.order),
+            "price": stop_price(t.order) or target_of(t.order) or (num(t.order.lmtPrice) if "LMT" in t.order.orderType else None),
             "tif": t.order.tif, "ref": t.order.orderRef,
             "status": t.orderStatus.status, "filled": t.orderStatus.filled, "parent": t.order.parentId,
         } for t in trades]

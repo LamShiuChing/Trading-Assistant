@@ -19,13 +19,14 @@ export type Levels = { pdh?: number; pdl?: number; pdc?: number; pmh?: number; p
 export type ChartMsg = { symbol: string; loading?: boolean; error?: string; bars?: Row[]; levels?: Levels }
 export type BarMsg = { symbol: string; rows: Row[]; levels: Levels }
 export type Position = {
-  symbol: string; qty: number; avg: number | null; avg_src: 'fills' | 'ibkr'; avg_cost: number | null
+  symbol: string; conId: number; qty: number; avg: number | null; avg_src: 'fills' | 'ibkr'; avg_cost: number | null
   last: number | null; value: number | null
   unrealized: number | null; realized: number | null; stop: number | null; target: number | null; r: number | null
 }
 export type Order = {
   id: number; perm_id: number; symbol: string; action: string; type: string; qty: number
-  limit: number | null; stop: number | null; tif: string; status: string; filled: number; parent: number; ref: string
+  kind: 'entry' | 'stop' | 'target' | 'backup' | 'sell' | 'other'; price: number | null
+  tif: string; status: string; filled: number; parent: number; ref: string
 }
 export type Fill = { time: string; symbol: string; side: string; qty: number; price: number; commission: number | null }
 export type Portfolio = {
@@ -49,8 +50,8 @@ export type Alert = { level: 'info' | 'warn' | 'error'; message: string; at: num
 export type TpMethod = 'r' | 'atr' | 'level' | 'trail'
 /** The order being prepared (local only; nothing is sent until Confirm). */
 export type Ticket = {
-  symbol: string; side: 'BUY' | 'SELL'; entry: number; stop: number
-  tp_method: TpMethod; target_r: number; target: number | null; qty: number | null
+  symbol: string; stop: number  // long only, market entry: the entry is the live price
+  tp_method: TpMethod; target_r: number; target: number | null; qty: number | null; risk_usd: number | null
 }
 type State = {
   ws: 'connecting' | 'open' | 'closed'

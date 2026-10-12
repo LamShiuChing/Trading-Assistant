@@ -78,13 +78,13 @@ orders = Orders(broker, risk, chart, portfolio)
 
 class TicketReq(BaseModel):
     symbol: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9.\- ]{0,11}$")
-    side: Literal["BUY", "SELL"]
-    entry: float = Field(gt=0)
+    side: Literal["BUY", "SELL"] = "BUY"  # SELL is refused with a clear message: short selling is disabled
     stop: float = Field(gt=0)
     tp_method: Literal["r", "atr", "level", "trail"] = "r"
     target_r: float | None = Field(default=None, gt=0, le=20)
     target: float | None = Field(default=None, gt=0)  # set when the target line was dragged on the chart
     qty: int | None = Field(default=None, gt=0)  # optional smaller size; never more than the risk-based size
+    risk_usd: float | None = Field(default=None, gt=0, le=100_000)  # $ risk for this trade; default from config
 
 
 def _need_connection():
@@ -97,7 +97,8 @@ async def ticket_preview(req: TicketReq):
     """Stage: size, $ risk, R:R and every risk check. Nothing is sent to IBKR."""
     _need_connection()
     try:
-        return await orders.preview(req.symbol.upper(), req.side, req.entry, req.stop, req.tp_method, req.target_r, req.target, req.qty)
+        return await orders.preview(req.symbol.upper(), req.side, req.stop, req.tp_method, req.target_r, req.target,
+                                    req.qty, req.risk_usd)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -135,6 +136,22 @@ async def flatten(req: FlattenReq):
     _need_connection()
     await orders.flatten_symbol(req.symbol.upper())
     return {"ok": True}
+
+
+class SellReq(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9.\- ]{0,11}$")
+    qty: float | None = Field(default=None, gt=0)  # None = sell everything
+
+
+@app.post("/api/sell")
+async def sell(req: SellReq):
+    """Market-sell part or all of a long position (never more than held, so never a short)."""
+    _need_connection()
+    try:
+        sold = await orders.sell(req.symbol.upper(), req.qty)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "qty": sold}
 
 
 @app.post("/api/kill")

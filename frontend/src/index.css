@@ -150,6 +150,7 @@ select { font: inherit; color: inherit; background: var(--panel); border: 1px so
 button.kill { background: #7f1d1d; border-color: var(--red); color: #fff; font-weight: 700; letter-spacing: 0.04em; }
 button.kill:hover:not(:disabled) { background: var(--red); }
 button.mini { padding: 1px 8px; font-size: 12px; }
+.btns { display: inline-flex; gap: 4px; }
 .row { display: flex; gap: 8px; justify-content: flex-end; }
 .confirm { min-width: 380px; }
 .confirm .big { font-size: 17px; font-weight: 600; margin: 4px 0 12px; }

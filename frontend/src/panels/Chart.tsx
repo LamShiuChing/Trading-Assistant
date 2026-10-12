@@ -5,7 +5,7 @@ import {
   type Time, type UTCTimestamp,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
-import { api, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
+import { api, pushAlert, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
 import type { Preview } from './Ticket'
 
 const TIMEFRAMES = [
@@ -90,6 +90,40 @@ class RangeBoxes implements ISeriesPrimitive<Time> {
   }
 }
 
+type Zone = { from: number; to: number; color: string }
+
+/** Full-width shaded bands between two prices (position risk / reward), drawn behind the candles. */
+class Zones implements ISeriesPrimitive<Time> {
+  zones: Zone[] = []
+  private p?: SeriesAttachedParameter<Time>
+  attached(p: SeriesAttachedParameter<Time>) { this.p = p }
+  detached() { this.p = undefined }
+  set(z: Zone[]) {
+    this.zones = z
+    this.p?.requestUpdate()
+  }
+  paneViews() {
+    return [{
+      zOrder: () => 'bottom' as const,
+      renderer: () => ({
+        draw: (target: CanvasRenderingTarget2D) => {
+          const p = this.p
+          if (!p) return
+          target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+            for (const z of this.zones) {
+              const y1 = p.series.priceToCoordinate(z.from)
+              const y2 = p.series.priceToCoordinate(z.to)
+              if (y1 == null || y2 == null) continue
+              ctx.fillStyle = z.color + '1f'
+              ctx.fillRect(0, Math.min(y1, y2), mediaSize.width, Math.abs(y2 - y1))
+            }
+          })
+        },
+      }),
+    }]
+  }
+}
+
 const LEVELS: { key: keyof Levels; title: string; color: string; style: LineStyle }[] = [
   { key: 'pdh', title: 'PDH', color: '#94a3b8', style: LineStyle.Dashed },
   { key: 'pdl', title: 'PDL', color: '#94a3b8', style: LineStyle.Dashed },
@@ -104,11 +138,12 @@ type Api = {
   vwap: ISeriesApi<'Line'>
   volume: ISeriesApi<'Histogram'>
   boxes: RangeBoxes
+  zones: Zones
   lines: IPriceLine[]
 }
 
 const round2 = (x: number) => Math.round(x * 100) / 100
-type LineKey = 'entry' | 'stop' | 'target'
+type LineKey = 'entry' | 'stop' | 'target'  // staged ticket lines
 
 export function Chart({ preview }: { preview?: Preview }) {
   const el = useRef<HTMLDivElement>(null)
@@ -151,12 +186,14 @@ export function Chart({ preview }: { preview?: Preview }) {
     chart.panes()[1].setStretchFactor(0.25)
     const boxes = new RangeBoxes()
     candles.attachPrimitive(boxes)
+    const zones = new Zones()
+    candles.attachPrimitive(zones)
     chart.subscribeCrosshairMove((p) => {
       const c = p.seriesData.get(candles) as { open: number; high: number; low: number; close: number } | undefined
       const v = p.seriesData.get(volume) as { value: number } | undefined
       setLegend(c && p.time ? { time: p.time as number, ...c, volume: v?.value ?? 0, vwap: null } : undefined)
     })
-    apiRef.current = { chart, candles, vwap: vw, volume, boxes, lines: [] }
+    apiRef.current = { chart, candles, vwap: vw, volume, boxes, zones, lines: [] }
     return () => chart.remove()
   }, [])
 
@@ -225,55 +262,69 @@ export function Chart({ preview }: { preview?: Preview }) {
     if (rows.current.length) drawAll(tf)
   }, [tf]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Entry / stop / target lines for the staged ticket.
+  // Staged ticket: dashed NEW STOP / NEW TP lines you can drag; the entry is the live price (market order).
   useEffect(() => {
     const a = apiRef.current!
     Object.values(tlines.current).forEach((l) => l && a.candles.removePriceLine(l))
     tlines.current = {}
     if (!ticket || ticket.symbol !== chartMsg?.symbol) return
     const mk = (price: number, color: string, title: string) =>
-      a.candles.createPriceLine({ price, color, lineWidth: 2, lineStyle: LineStyle.Solid, title, axisLabelVisible: true })
-    tlines.current.entry = mk(ticket.entry, '#3b82f6', `${ticket.side === 'BUY' ? 'BUY' : 'SELL'} ${preview?.qty ?? ''}`)
-    tlines.current.stop = mk(ticket.stop, '#ef4444', `STOP ${preview ? '-$' + preview.risk.toFixed(0) : ''}`)
+      a.candles.createPriceLine({ price, color, lineWidth: 2, lineStyle: LineStyle.Dashed, title, axisLabelVisible: true })
+    if (preview) tlines.current.entry = mk(preview.entry, '#60a5fa', `BUY ${preview.qty} (est.)`)
+    tlines.current.stop = mk(ticket.stop, '#f87171', `NEW STOP ${preview ? '-$' + preview.risk.toFixed(0) : ''}`)
     const tgt = ticket.target ?? preview?.target
-    if (tgt != null) tlines.current.target = mk(tgt, '#22c55e', `TARGET ${preview?.rr ? preview.rr + 'R' : ''}`)
+    if (tgt != null) tlines.current.target = mk(tgt, '#4ade80', `NEW TP ${preview?.rr ? preview.rr + 'R' : ''}`)
   }, [ticket, preview, chartMsg?.symbol])
 
-  // Your position and working orders on this symbol, as dashed lines (read-only).
+  // Live position and its exits: thick solid lines + shaded risk (red) / reward (green) zones.
   useEffect(() => {
     const a = apiRef.current!
     const sym = chartMsg?.symbol
-    const lines: { price: number; color: string; title: string; style: LineStyle }[] = []
-    for (const p of portfolio?.positions ?? []) {
-      if (p.symbol === sym && p.avg != null)
-        lines.push({ price: p.avg, color: '#e5e7eb', style: LineStyle.Dashed,
-                     title: `POS ${p.qty > 0 ? '+' : ''}${p.qty}${p.r != null ? ` ${p.r > 0 ? '+' : ''}${p.r}R` : ''}` })
+    const pos = (portfolio?.positions ?? []).find((p) => p.symbol === sym && p.qty > 0)
+    const mine = (portfolio?.orders ?? []).filter((o) => o.symbol === sym)
+    const stop = mine.find((o) => o.kind === 'stop' && o.price != null)
+    const tp = mine.find((o) => o.kind === 'target' && o.price != null)
+    const money = (v: number) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+    const lines: { price: number; color: string; title: string; lineWidth: 1 | 2 | 3 | 4; lineStyle: LineStyle }[] = []
+    if (pos && pos.avg != null) {
+      const upnl = pos.last != null ? (pos.last - pos.avg) * pos.qty : null
+      lines.push({ price: pos.avg, color: '#f8fafc', lineWidth: 2, lineStyle: LineStyle.Solid,
+                   title: `POS ${pos.qty}${upnl != null ? ' ' + money(upnl) : ''}${pos.r != null ? ` ${pos.r > 0 ? '+' : ''}${pos.r}R` : ''}` })
     }
-    for (const o of portfolio?.orders ?? []) {
-      if (o.symbol !== sym) continue
-      const left = o.qty - o.filled
-      if (o.stop != null)
-        lines.push({ price: o.stop, color: '#ef4444', style: LineStyle.LargeDashed, title: `${o.type === 'TRAIL' ? 'TRAIL' : 'STOP'} ${left}` })
-      else if (o.limit != null)
-        lines.push(o.parent
-          ? { price: o.limit, color: '#22c55e', style: LineStyle.LargeDashed, title: `TP ${left}` }
-          : { price: o.limit, color: '#3b82f6', style: LineStyle.LargeDashed, title: `${o.action} ${left} LMT` })
+    if (stop) {
+      const left = stop.qty - stop.filled
+      const risk = pos?.avg != null ? (stop.price! - pos.avg) * left : null
+      lines.push({ price: stop.price!, color: '#ef4444', lineWidth: 3, lineStyle: LineStyle.Solid,
+                   title: `${stop.type === 'TRAIL' ? 'TRAIL' : 'STOP'} ${left}${risk != null ? ' ' + money(risk) : ''}` })
     }
-    const key = JSON.stringify(lines)
+    if (tp) {
+      const left = tp.qty - tp.filled
+      const reward = pos?.avg != null ? (tp.price! - pos.avg) * left : null
+      lines.push({ price: tp.price!, color: '#22c55e', lineWidth: 3, lineStyle: LineStyle.Solid,
+                   title: `TP ${left}${reward != null ? ' ' + money(reward) : ''}` })
+    }
+    for (const o of mine.filter((o) => o.kind === 'entry' && o.price != null))
+      lines.push({ price: o.price!, color: '#3b82f6', lineWidth: 2, lineStyle: LineStyle.Dashed, title: `BUY ${o.qty - o.filled} working` })
+
+    const zones = pos?.avg != null
+      ? [stop && { from: pos.avg, to: stop.price!, color: '#ef4444' }, tp && { from: pos.avg, to: tp.price!, color: '#22c55e' }]
+      : []
+    const key = JSON.stringify([lines, zones])
     if (key === olinesKey.current) return  // portfolio pushes ~3/s; only redraw when something changed
     olinesKey.current = key
     olines.current.forEach((l) => a.candles.removePriceLine(l))
-    olines.current = lines.map((l) => a.candles.createPriceLine({ ...l, lineWidth: 1, axisLabelVisible: true }))
+    olines.current = lines.map((l) => a.candles.createPriceLine({ ...l, axisLabelVisible: true }))
+    a.zones.set(zones.filter(Boolean) as Zone[])
   }, [portfolio, chartMsg?.symbol])
 
-  // Drag those lines with the mouse. The chart's own panning is paused while dragging.
+  // Drag the NEW STOP / NEW TP lines with the mouse. The chart's own panning is paused while dragging.
   useEffect(() => {
     const box = el.current!
-    let drag: LineKey | null = null
+    let drag: 'stop' | 'target' | null = null
     const y = (e: MouseEvent) => e.clientY - box.getBoundingClientRect().top
-    const hit = (py: number): LineKey | null => {
+    const hit = (py: number): 'stop' | 'target' | null => {
       const a = apiRef.current!
-      for (const k of ['stop', 'target', 'entry'] as const) {
+      for (const k of ['stop', 'target'] as const) {
         const l = tlines.current[k]
         const ly = l && a.candles.priceToCoordinate(l.options().price)
         if (ly != null && Math.abs(ly - py) < 6) return k
@@ -313,20 +364,20 @@ export function Chart({ preview }: { preview?: Preview }) {
     }
   }, [])
 
-  // Keyboard: 1 / 5 / F switch timeframe, B / S stage a long / short, Esc drops it (ignored while typing).
+  // Keyboard: 1 / 5 / F timeframe, B stage a market buy, Esc drops it (ignored while typing). No shorts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, textarea') || e.ctrlKey || e.metaKey || e.altKey) return
       const k = e.key.toLowerCase()
       const hit = TIMEFRAMES.find((x) => x.key === k)
       if (hit) setTf(hit.tf)
-      if ((k === 'b' || k === 's') && rows.current.length && symbolRef.current) {
-        // Stage at the last price; stop just beyond the last 5 one-minute bars. Drag the lines to adjust.
-        const rs = rows.current, last = rs[rs.length - 1].close, recent = rs.slice(-5), long = k === 'b'
-        let stop = round2(long ? Math.min(...recent.map((r) => r.low)) - 0.01 : Math.max(...recent.map((r) => r.high)) + 0.01)
-        if (long ? stop >= last : stop <= last) stop = round2(long ? last * 0.995 : last * 1.005)
-        setTicket({ symbol: symbolRef.current, side: long ? 'BUY' : 'SELL', entry: round2(last), stop,
-                    tp_method: 'r', target_r: 2, target: null, qty: null })
+      if (k === 's') pushAlert('warn', 'Short selling is disabled. This app only buys to open.')
+      if (k === 'b' && rows.current.length && symbolRef.current) {
+        // Stop just under the last 5 one-minute bars. Drag the lines to adjust.
+        const rs = rows.current, last = rs[rs.length - 1].close, recent = rs.slice(-5)
+        let stop = round2(Math.min(...recent.map((r) => r.low)) - 0.01)
+        if (stop >= last) stop = round2(last * 0.995)
+        setTicket({ symbol: symbolRef.current, stop, tp_method: 'r', target_r: 2, target: null, qty: null, risk_usd: null })
       }
       if (e.key === 'Escape' && !document.querySelector('.modal')) setTicket(undefined)
     }

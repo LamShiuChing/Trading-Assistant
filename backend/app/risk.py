@@ -122,10 +122,12 @@ class RiskManager:
         for t in trades:  # working entries (parents) not yet filled
             o = t.order
             if o.parentId == 0 and o.orderRef.startswith("TA") and t.contract.conId not in held:
-                kids = [k.order for k in trades if k.order.parentId == o.orderId and k.order.orderType == "STP"]
-                risk = abs(o.lmtPrice - kids[0].auxPrice) * o.totalQuantity if kids else R["risk_per_trade"]
+                # Market entries fill at once, so this is brief. Price it from the stop + journal risk.
+                row = db.conn.execute("SELECT entry, risk FROM trades WHERE parent_id=?", (o.orderId,)).fetchone()
+                risk = row["risk"] if row else R["risk_per_trade"]
+                value = (row["entry"] if row else 0) * o.totalQuantity
                 items.append({"symbol": t.contract.symbol, "conId": t.contract.conId,
-                              "value": o.lmtPrice * o.totalQuantity, "risk": risk, "unprotected": False})
+                              "value": value, "risk": risk, "unprotected": False})
         return {"items": items, "risk": sum(i["risk"] for i in items)}
 
     def state(self) -> dict:
@@ -165,6 +167,16 @@ class RiskManager:
         out = list(st["blockers"])
         exp = self._open_exposure()
         risk = abs(entry - stop) * qty
+        # Adding to a held stock: the new stop will cover ALL its shares (one stop per position), so count the
+        # merged position's risk at the new stop instead of the old position's risk plus the add.
+        cur = next((i for i in exp["items"] if i["conId"] == contract.conId), None)
+        if cur:
+            p = next((p for p in self.broker.ib.portfolio(self.broker.account) if p.contract.conId == contract.conId), None)
+            if p and p.position > 0:
+                total = p.position + qty
+                new_avg = (p.averageCost * p.position + entry * qty) / total
+                exp = {**exp, "risk": exp["risk"] - cur["risk"]}
+                risk = max(new_avg - stop, 0) * total
         if qty <= 0:
             out.append("Size is 0 (stop too wide, or not enough buying power)")
         if not any(i["conId"] == contract.conId for i in exp["items"]) and len(exp["items"]) + 1 > R["max_positions"]:

@@ -9,6 +9,12 @@ const openChart = (symbol: string) => api('/api/chart', { symbol }).catch(() => 
 const act = (path: string, body: unknown, done: string) =>
   api(path, body).then(() => pushAlert('info', done), (e) => pushAlert('error', e instanceof ApiError ? e.message : String(e)))
 
+function sellAt(symbol: string, qty: number | null, held: number) {
+  const n = qty ?? held
+  if (!confirm(`Market-sell ${n} of ${held} ${symbol}?`)) return
+  act('/api/sell', { symbol, qty }, `Selling ${n} ${symbol} at market`)
+}
+
 export function AccountSummary() {
   const s = useStore((st) => st.portfolio?.summary)
   if (!s) return <section className="side card-flat muted">Loading account…</section>
@@ -71,18 +77,23 @@ export function PortfolioTabs() {
               <span className={sign(x.unrealized)}>{fmt(x.unrealized)}</span>,
               px(x.stop), px(x.target),
               <span className={sign(x.r)}>{x.r == null ? '—' : `${x.r > 0 ? '+' : ''}${x.r}R`}</span>,
-              <button className="mini" disabled={!confirmed} title="Cancel this symbol's orders and close the position at market"
-                onClick={() => act('/api/flatten', { symbol: x.symbol }, `Flattening ${x.symbol}`)}>Flatten</button>,
+              <span className="btns">
+                <button className="mini" disabled={!confirmed || x.qty < 2} title="Market-sell half. The stop and target shrink to what's left."
+                  onClick={() => sellAt(x.symbol, Math.floor(x.qty / 2), x.qty)}>Sell ½</button>
+                <button className="mini" disabled={!confirmed} title="Market-sell everything and cancel its stop/target"
+                  onClick={() => sellAt(x.symbol, null, x.qty)}>Sell all</button>
+              </span>,
             ])}
           />
         ) : tab === 'orders' ? (
           <Table
             empty="No working orders"
-            head={['Id', 'Symbol', 'Side', 'Type', 'Qty', 'Limit', 'Stop', 'TIF', 'Filled', 'Status', '']}
+            head={['Id', 'Symbol', 'Role', 'Side', 'Type', 'Qty', 'Price', 'TIF', 'Filled', 'Status', '']}
             rows={p.orders.map((o) => [
               o.id, <button className="link" onClick={() => openChart(o.symbol)}>{o.symbol}</button>,
+              o.kind === 'backup' ? 'force-flat backup' : o.kind === 'target' ? 'take profit' : o.kind,
               <span className={o.action === 'BUY' ? 'up' : 'down'}>{o.action}</span>,
-              o.type, o.qty, px(o.limit), px(o.stop), o.tif, o.filled,
+              o.type, o.qty, px(o.price), o.tif, o.filled,
               // Never show an order state IBKR hasn't confirmed on the current connection.
               confirmed ? o.status : <span className="warn-text">UNCONFIRMED</span>,
               <button className="mini" disabled={!confirmed} title={o.parent ? 'Cancel this exit order' : 'Cancel (an entry also cancels its exits)'}
