@@ -6,8 +6,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8765',
-      '/ws': { target: 'ws://127.0.0.1:8765', ws: true },
+      // changeOrigin rewrites Host to the backend's, which passes its Host check.
+      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true },
+      '/ws': { target: 'ws://127.0.0.1:8765', ws: true, changeOrigin: true },
     },
   },
 })

@@ -7,6 +7,7 @@ from typing import Literal
 
 import keyring
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, SecretStr
 
@@ -33,6 +34,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Only our own UI may talk to us. The Host check blocks DNS rebinding. The Origin check blocks
+# cross-site form posts and WebSocket hijacking from other sites open in the browser.
+# A request with no Origin header (the launcher's PowerShell calls) is allowed.
+_PORT = CFG["app"]["port"]
+ALLOWED_HOSTS = {f"127.0.0.1:{_PORT}", f"localhost:{_PORT}"}
+ALLOWED_ORIGINS = {f"http://{h}" for h in ALLOWED_HOSTS} | {"http://localhost:5173", "http://127.0.0.1:5173"}  # + Vite dev
+
+
+def _is_local(headers) -> bool:
+    origin = headers.get("origin")
+    return headers.get("host") in ALLOWED_HOSTS and (origin is None or origin in ALLOWED_ORIGINS)
+
+
+@app.middleware("http")
+async def local_only(request, call_next):
+    if not _is_local(request.headers):
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return await call_next(request)
 
 
 def _settings() -> dict:
@@ -118,6 +138,9 @@ async def window_closed():
 
 @app.websocket("/ws")
 async def ws(sock: WebSocket):
+    if not _is_local(sock.headers):  # HTTP middleware doesn't run for WebSockets
+        await sock.close(code=1008)
+        return
     await sock.accept()
     hub.clients.add(sock)
     for t, d in list(hub.latest.items()):
