@@ -7,6 +7,7 @@ import {
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
 import { api, lastQty, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
 import type { Preview } from './Ticket'
+import { rsi } from '../indicators'
 
 const TIMEFRAMES = [
   { tf: 1, key: '1', label: '1m' },
@@ -36,6 +37,10 @@ function aggregate(rows: Row[], tf: number): Row[] {
 }
 
 const t = (x: number) => x as UTCTimestamp
+const rsiPoints = (data: Row[]) => {
+  const v = rsi(data.map((r) => r.close))
+  return data.map((r, i) => (v[i] == null ? { time: t(r.time) } : { time: t(r.time), value: Math.round(v[i]! * 100) / 100 }))
+}
 const candle = (r: Row) => ({ time: t(r.time), open: r.open, high: r.high, low: r.low, close: r.close })
 const vol = (r: Row) => ({ time: t(r.time), value: r.volume, color: r.close >= r.open ? '#22c55e55' : '#ef444455' })
 // VWAP restarts each day. A segment takes its start point's color, so the last point before
@@ -137,6 +142,7 @@ type Api = {
   candles: ISeriesApi<'Candlestick'>
   vwap: ISeriesApi<'Line'>
   volume: ISeriesApi<'Histogram'>
+  rsi: ISeriesApi<'Line'>
   boxes: RangeBoxes
   zones: Zones
   lines: IPriceLine[]
@@ -184,6 +190,14 @@ export function Chart({ preview }: { preview?: Preview }) {
     })
     const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, 1)
     chart.panes()[1].setStretchFactor(0.25)
+    // RSI(14) in its own pane of the same chart: shares the time axis, scrolling, zoom and crosshair.
+    const rsiSeries = chart.addSeries(LineSeries, {
+      color: '#a78bfa', lineWidth: 1, priceLineVisible: false, title: 'RSI 14',
+      autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
+    }, 2)
+    chart.panes()[2].setStretchFactor(0.4)
+    for (const level of [70, 30])
+      rsiSeries.createPriceLine({ price: level, color: '#64748b', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: '' })
     const boxes = new RangeBoxes()
     candles.attachPrimitive(boxes)
     const zones = new Zones()
@@ -193,7 +207,7 @@ export function Chart({ preview }: { preview?: Preview }) {
       const v = p.seriesData.get(volume) as { value: number } | undefined
       setLegend(c && p.time ? { time: p.time as number, ...c, volume: v?.value ?? 0, vwap: null } : undefined)
     })
-    apiRef.current = { chart, candles, vwap: vw, volume, boxes, zones, lines: [] }
+    apiRef.current = { chart, candles, vwap: vw, volume, rsi: rsiSeries, boxes, zones, lines: [] }
     return () => chart.remove()
   }, [])
 
@@ -220,6 +234,7 @@ export function Chart({ preview }: { preview?: Preview }) {
     a.candles.setData(data.map(candle))
     a.vwap.setData(data.map((r, i) => vwap(r, data[i + 1])))
     a.volume.setData(data.map(vol))
+    a.rsi.setData(rsiPoints(data))
     drawLevels(tfNow)
   }
 
@@ -253,6 +268,10 @@ export function Chart({ preview }: { preview?: Preview }) {
       a.vwap.update(vwap(b, tail[i + 1]))
       a.volume.update(vol(b))
     })
+    // RSI depends on all history: recompute over the full series, redraw only the newest point(s).
+    const pts = rsiPoints(aggregate(rs, tf))
+    const cutoff = Math.max(firstNew, (a.rsi.data().at(-1)?.time as number | undefined) ?? 0)
+    for (const p of pts) if ((p.time as number) >= cutoff) a.rsi.update(p)
     levels.current = barMsg.levels
     drawLevels(tf)
   }, [barMsg]) // eslint-disable-line react-hooks/exhaustive-deps
