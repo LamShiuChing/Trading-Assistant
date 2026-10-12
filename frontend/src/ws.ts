@@ -13,7 +13,37 @@ export type LoginProgress = {
   code?: string
   message?: string
 }
-type State = { ws: 'connecting' | 'open' | 'closed'; connection?: Connection; login?: LoginProgress }
+export type Row = { time: number; open: number; high: number; low: number; close: number; volume: number; vwap: number | null }
+export type Range = { high: number; low: number; start: number; end: number; complete: boolean }
+export type Levels = { pdh?: number; pdl?: number; pdc?: number; pmh?: number; pml?: number; or5?: Range; or15?: Range }
+export type ChartMsg = { symbol: string; loading?: boolean; error?: string; bars?: Row[]; levels?: Levels }
+export type BarMsg = { symbol: string; rows: Row[]; levels: Levels }
+export type Position = {
+  symbol: string; qty: number; avg: number | null; last: number | null; value: number | null
+  unrealized: number | null; realized: number | null; stop: number | null; target: number | null; r: number | null
+}
+export type Order = {
+  id: number; perm_id: number; symbol: string; action: string; type: string; qty: number
+  limit: number | null; stop: number | null; tif: string; status: string; filled: number; parent: number
+}
+export type Fill = { time: string; symbol: string; side: string; qty: number; price: number; commission: number | null }
+export type Portfolio = {
+  summary: {
+    net_liq?: number; cash?: number; buying_power?: number; currency?: string
+    day_pnl?: number | null; unrealized?: number | null; realized?: number | null
+  }
+  positions: Position[]
+  orders: Order[]
+  fills: Fill[]
+}
+type State = {
+  ws: 'connecting' | 'open' | 'closed'
+  connection?: Connection
+  login?: LoginProgress
+  chart?: ChartMsg
+  bar?: BarMsg
+  portfolio?: Portfolio
+}
 
 let state: State = { ws: 'connecting' }
 const subs = new Set<() => void>()

@@ -9,10 +9,14 @@ New-Item -ItemType Directory -Force "$data\logs" | Out-Null
 $shell = New-Object -ComObject WScript.Shell
 
 function Test-Up {
-    try { (Invoke-WebRequest "$url/api/health" -UseBasicParsing -TimeoutSec 1).StatusCode -eq 200 } catch { $false }
+    try { (Invoke-WebRequest "$url/api/health" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200 } catch { $false }
 }
 
-if (Test-Up) {
+# Windows lets two processes listen on the same port (uvicorn sets SO_REUSEADDR), so a slow health
+# check must never start a second backend. If anything is listening, treat the backend as running.
+$listening = [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+
+if ($listening -or (Test-Up)) {
     # Already running. Focus the window if it's open. If it was closed while positions were open,
     # the backend kept running, so fall through and reopen the window.
     if ($shell.AppActivate('Trading Assistant')) { exit }

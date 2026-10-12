@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { Boundary } from './Boundary'
+import { Chart } from './panels/Chart'
 import { Login } from './panels/Login'
+import { AccountSummary, PortfolioTabs } from './panels/Portfolio'
 import { api, ApiError, useStore } from './ws'
 
 const STATE_LABEL = {
@@ -45,8 +48,10 @@ export default function App() {
       {showLogin ? (
         <Login />
       ) : (
-        <main className="center muted">
-          {conn.account && <>Connected to {conn.account}. The chart and portfolio come in phase 1b.</>}
+        <main className="workspace">
+          <Boundary name="Chart"><Chart /></Boundary>
+          <Boundary name="Account"><AccountSummary /></Boundary>
+          <Boundary name="Portfolio"><PortfolioTabs /></Boundary>
         </main>
       )}
     </div>
@@ -89,7 +94,7 @@ function Header() {
         <div className="modal" onClick={() => setBlockers(undefined)}>
           <div className="card" onClick={(e) => e.stopPropagation()}>
             <h3>Can't quit yet</h3>
-            <p>Flatten and cancel these first. The flatten button comes in phase 2.</p>
+            <p>Flatten and cancel these first (the flatten button comes in phase 2), or close the window instead: the app keeps running in the background until you're flat.</p>
             <ul>
               {blockers.map((b) => (
                 <li key={b}>{b}</li>

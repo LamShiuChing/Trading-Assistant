@@ -3,7 +3,15 @@
 Local-only intraday trading assistant for IBKR. It runs as one process on `127.0.0.1:8765`, and the UI opens in a chromeless Edge window.
 It defaults to **PAPER**. It never places trades on its own, except the end-of-day safety force-flat (phase 2).
 
-Status: **phase 1a**. Done: login through IBC, connection state, PAPER/LIVE badge, and the launcher. The chart and portfolio come in phase 1b.
+Status: **phase 1b**. Done: login through IBC, connection state, PAPER/LIVE badge, launcher, the live chart, and the read-only portfolio.
+Next: phase 2 (order ticket, risk manager, kill switch, force-flat).
+
+## Chart
+- Live 1-min IBKR bars, including pre-market and after-hours, over 3 days. 5m and 15m are built from the 1-min bars.
+- **VWAP** restarts at each day's 09:30.
+- **Levels:** PDH, PDL, and PDC from the prior day's 09:30–16:00. PMH and PML from today's 04:00–09:30.
+- **Opening ranges:** OR5 (pink) and OR15 (blue) boxes. A box is dashed while its range is still forming.
+- **Keys:** `/` searches for a symbol, and `1`, `5`, `F` switch timeframe. Click a symbol in the bottom tables to chart it.
 
 ## Setup (once)
 1. Check the prerequisites: `powershell -ExecutionPolicy Bypass -File launcher\check-setup.ps1`.

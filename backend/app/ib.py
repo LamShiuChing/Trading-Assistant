@@ -34,6 +34,7 @@ class Broker:
         self.account: str | None = None
         self.mismatch = False
         self.blocked_live = False
+        self.on_ready: list = []  # async callbacks run after every (re)connect + reconcile
         self.ib.disconnectedEvent += lambda: self._set("disconnected")
         self.ib.errorEvent += self._on_error
 
@@ -49,10 +50,20 @@ class Broker:
 
     def _on_error(self, reqId, code, msg, contract) -> None:
         # https://www.interactivebrokers.com/docs/tws-api/doc/error-handling/system-message-codes
+        # 2100-2199 are informational ("market data farm connection is OK" etc.).
+        log.log(logging.INFO if 2100 <= code < 2200 else logging.WARNING,
+                "IB %s reqId=%s %s %s", code, reqId, msg, getattr(contract, "symbol", ""))
         if code == 1100:
             self._set("degraded")
-        elif code in (1101, 1102) and self.ib.isConnected():
-            self._set("ready")  # phase 1b: on 1101 re-subscribe market data
+        elif code == 1101 and self.ib.isConnected():
+            self._set("ready")
+            self._run_ready()  # market data subscriptions were lost: resubscribe
+        elif code == 1102 and self.ib.isConnected():
+            self._set("ready")
+
+    def _run_ready(self) -> None:
+        for cb in self.on_ready:
+            asyncio.get_running_loop().create_task(cb())
 
     async def run(self) -> None:
         while True:
@@ -81,9 +92,10 @@ class Broker:
             self._set("reconciling")
             await self.ib.reqAllOpenOrdersAsync()  # include orders placed from TWS/mobile/other clients
             self.account = self.ib.managedAccounts()[0]
-            # Paper account IDs start with "D" (e.g. DU1234567). Unverified, so check on first paper login.
+            # Paper account IDs start with "D" (DU…). Confirmed on a real paper login 2026-10-12.
             self.mismatch = (mode == "paper") != self.account.startswith("D")
             self._set("ready")
+            self._run_ready()
             return
 
     def can_trade(self) -> bool:

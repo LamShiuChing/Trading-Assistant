@@ -9,19 +9,23 @@ import keyring
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from . import gateway, hub
 from .config import CFG, DATA, ROOT
 from .ib import PORTS, Broker, port_open
+from .market import ChartFeed
+from .portfolio import Portfolio
 
 logging.basicConfig(
     filename=DATA / "logs" / "app.log", level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+logging.getLogger("ib_async").setLevel(logging.WARNING)  # INFO logs every position/portfolio update
 KEYRING_SERVICE = "TradingAssistant"
 SETTINGS = DATA / "settings.json"  # non-secret UI prefs (last username)
 broker = Broker()
+portfolio = Portfolio(broker)
 
 
 @asynccontextmanager
@@ -59,6 +63,13 @@ def _settings() -> dict:
     return json.loads(SETTINGS.read_text()) if SETTINGS.exists() else {}
 
 
+def _save_setting(**kw) -> None:
+    SETTINGS.write_text(json.dumps({**_settings(), **kw}))
+
+
+chart = ChartFeed(broker, _settings().get("symbol", "SPY"))
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
@@ -91,7 +102,7 @@ async def login(req: Login):
         raise HTTPException(400, "Password required.")
     if req.remember:
         keyring.set_password(KEYRING_SERVICE, req.username, pw)
-    SETTINGS.write_text(json.dumps({**_settings(), "username": req.username}))
+    _save_setting(username=req.username)
     gateway.launch(req.username, pw, req.mode, req.takeover)
     return {"ok": True}
 
@@ -102,6 +113,31 @@ def forget_password():
     if username and keyring.get_password(KEYRING_SERVICE, username) is not None:
         keyring.delete_password(KEYRING_SERVICE, username)
     return {"ok": True}
+
+
+class ChartReq(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9.\- ]{0,11}$")
+
+
+@app.post("/api/chart")
+async def set_chart(req: ChartReq):
+    if broker.state not in ("ready", "degraded"):
+        raise HTTPException(409, "Not connected to IBKR.")
+    symbol = req.symbol.upper().strip()
+    _save_setting(symbol=symbol)
+    await chart.set_symbol(symbol)
+    return {"ok": True}
+
+
+@app.get("/api/symbols")
+async def symbols(q: str):
+    """US stock matches for the symbol search box."""
+    if broker.state not in ("ready", "degraded") or not q.strip():
+        return []
+    found = await broker.ib.reqMatchingSymbolsAsync(q.strip()) or []
+    return [{"symbol": d.contract.symbol, "exchange": d.contract.primaryExchange,
+             "name": getattr(d.contract, "description", "")}
+            for d in found if d.contract and d.contract.secType == "STK" and d.contract.currency == "USD"]
 
 
 async def _quit_blockers() -> list[str]:
