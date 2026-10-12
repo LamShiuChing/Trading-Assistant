@@ -94,6 +94,7 @@ class ChartFeed:
     def __init__(self, broker, symbol: str):
         self.broker, self.symbol, self.bars = broker, symbol, None
         self.levels: dict = {}
+        self.con_id: int | None = None
         broker.on_ready.append(self.resubscribe)
 
     async def resubscribe(self) -> None:
@@ -112,6 +113,7 @@ class ChartFeed:
         if not contract.conId:
             publish("chart", {"symbol": symbol, "error": f"Unknown symbol {symbol}"})
             return
+        self.con_id = contract.conId
         bars = await ib.reqHistoricalDataAsync(contract, "", "3 D", "1 min", "TRADES",
                                                useRTH=False, keepUpToDate=True)
         if symbol != self.symbol:  # user switched again while this request was in flight

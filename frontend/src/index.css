@@ -125,7 +125,21 @@ th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
 /* Phase 2: right column, ticket, risk, kill switch, alerts */
 .workspace { grid-template-columns: 1fr 300px; grid-template-rows: 1fr; }
 .portfolio-view { grid-template-columns: 300px 1fr; }
-.trade-view { grid-template-columns: 290px 1fr 300px; }
+.screener-view { grid-template-columns: 1fr 440px; }
+.news { display: flex; flex-direction: column; min-height: 0; }
+.news.side { padding: 0; }
+.news .panel-head h3 { font-size: 13px; }
+.pad-x { padding: 4px 10px; }
+.news-item { padding: 6px 10px; border-bottom: 1px solid #1a1f27; }
+.news-item.offering { background: #2a1010; }
+.news-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; }
+.news-meta .provider { margin-left: auto; }
+.news-headline { margin-top: 2px; line-height: 1.35; }
+.chip { font-size: 11px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); white-space: nowrap; }
+.chip.up { color: var(--green); border-color: #14532d; }
+.chip.down { color: var(--red); border-color: #7f1d1d; }
+.chip.warn { color: #fcd34d; border-color: #78350f; }
+.chip.danger { color: #fff; background: #b91c1c; border-color: var(--red); font-weight: 600; }
 .screener { display: flex; flex-direction: column; min-height: 0; }
 .panel-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .panel-head h3 { margin: 0; font-size: 13px; }

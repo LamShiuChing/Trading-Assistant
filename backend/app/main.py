@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import logging
 import signal
 import subprocess
@@ -19,6 +20,7 @@ from .market import ChartFeed
 from .orders import Orders
 from .portfolio import Portfolio
 from .risk import RiskManager
+from .news import News
 from .screener import Screener
 
 logging.basicConfig(
@@ -35,7 +37,8 @@ portfolio = Portfolio(broker)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     hub.publish("connection", broker.snapshot())
-    tasks = [asyncio.create_task(broker.run()), asyncio.create_task(risk.run()), asyncio.create_task(screener.run())]
+    tasks = [asyncio.create_task(broker.run()), asyncio.create_task(risk.run()), asyncio.create_task(screener.run()),
+             asyncio.create_task(news.run())]
     yield
     for t in tasks:
         t.cancel()
@@ -76,6 +79,8 @@ chart = ChartFeed(broker, _settings().get("symbol", "SPY"))
 risk = RiskManager(broker, portfolio)
 orders = Orders(broker, risk, chart, portfolio)
 screener = Screener(broker, risk)
+news = News(broker, screener, chart, portfolio)
+screener.news = news
 
 
 class TicketReq(BaseModel):
@@ -269,7 +274,7 @@ async def restart():
     Windows job object that kills all children when it exits, so the helper must break away from the job."""
     subprocess.Popen(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-         "-File", str(ROOT / "launcher" / "start-backend.ps1")],
+         "-File", str(ROOT / "launcher" / "start-backend.ps1"), "-OldPid", str(os.getpid())],
         creationflags=subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
         close_fds=True,
     )

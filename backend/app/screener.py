@@ -4,6 +4,7 @@
 sees is in `features`, and every row is published with its parts so the ranking is explainable.
 """
 import asyncio
+import json
 import logging
 import math
 import time
@@ -12,13 +13,14 @@ from statistics import mean
 
 from ib_async import ScannerSubscription, TagValue
 
-from .config import CFG
+from .config import CFG, DATA
 from .hub import publish
 from .ib import screener_hist
 from .risk import ET
 
 log = logging.getLogger(__name__)
 S = CFG["screener"]
+LAST = DATA / "screener_last.json"  # last scan, shown after a restart or the close until the next scan
 
 
 # ---------- pure feature / score functions (unit tested) ----------
@@ -85,6 +87,12 @@ class Screener:
         self.daily: dict[tuple[int, date], dict | None] = {}
         self.intra: dict[int, tuple[float, float | None]] = {}  # conId -> (fetched monotonic, rvol)
         self.busy = False
+        self.rows: list[dict] = []
+        self.news = None  # set by main: today's tagged catalyst feeds the score
+        if LAST.exists():
+            last = json.loads(LAST.read_text())
+            self.rows = last["rows"]
+            publish("screener", last)
 
     def _filters(self) -> list[TagValue]:
         # Tag names verified against this Gateway's reqScannerParameters XML; avgUsdVolumeAbove is in dollars.
@@ -126,7 +134,10 @@ class Screener:
                 total, parts = score(f)
                 rows.append({**f, "score": total, "parts": parts, "fails": check_filters(f)})
             rows.sort(key=lambda r: (not r["fails"], r["score"]), reverse=True)
-            publish("screener", {"updated": datetime.now(ET).strftime("%H:%M:%S"), "rows": rows})
+            self.rows = rows
+            payload = {"updated": datetime.now(ET).strftime("%m-%d %H:%M:%S"), "rows": rows}
+            LAST.write_text(json.dumps(payload))
+            publish("screener", payload)
         finally:
             self.busy = False
 
@@ -157,5 +168,6 @@ class Screener:
             "change_pct": round((price / d["prev_close"] - 1) * 100, 2),
             "gap_atr": round((price - d["prev_close"]) / d["atr"], 2) if d["atr"] else 0.0,
             "rvol": got[1], "avg_usd_vol": round(d["avg_usd_vol"]), "spread_pct": spread,
-            "industry": await self.risk.industry_of(c), "catalyst": None,
+            "industry": await self.risk.industry_of(c),
+            "catalyst": self.news.catalyst_today(c.symbol) if self.news else None,
         }

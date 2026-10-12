@@ -30,6 +30,13 @@ min_gap_atr = 1.0                  # gap vs prior close, in daily ATRs
 min_rvol = 3.0                     # volume so far vs average at this time of day
 max_spread_pct = 0.3
 
+[news]
+interval_sec = 90                  # poll IBKR headlines for watched symbols
+screener_symbols = 10              # watch the top N screener names (plus positions and the chart symbol)
+per_symbol = 10                    # headlines per symbol per poll (last 2 days)
+batch = 25                         # headlines tagged per Claude request
+model = "claude-opus-5-5"          # tagger model; ANTHROPIC_API_KEY must be in .env
+
 [gateway]
 ibc_path = 'C:\IBC'
 tws_path = 'C:\Jts'

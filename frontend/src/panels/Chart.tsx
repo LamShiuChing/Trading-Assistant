@@ -5,7 +5,7 @@ import {
   type Time, type UTCTimestamp,
 } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas' // ships with lightweight-charts
-import { api, lastQty, pushAlert, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
+import { api, lastQty, setTicket, useStore, type Levels, type Range, type Row, type Ticket } from '../ws'
 import type { Preview } from './Ticket'
 
 const TIMEFRAMES = [
@@ -364,14 +364,13 @@ export function Chart({ preview }: { preview?: Preview }) {
     }
   }, [])
 
-  // Keyboard: 1 / 5 / F timeframe, B stage a market buy, Esc drops it (ignored while typing). No shorts.
+  // Keyboard: 1 / 5 / F timeframe, B stage a market buy, Esc drops it (ignored while typing). Long only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, textarea') || e.ctrlKey || e.metaKey || e.altKey) return
       const k = e.key.toLowerCase()
       const hit = TIMEFRAMES.find((x) => x.key === k)
       if (hit) setTf(hit.tf)
-      if (k === 's') pushAlert('warn', 'Short selling is disabled. This app only buys to open.')
       if (k === 'b' && rows.current.length && symbolRef.current) {
         // Stop just under the last 5 one-minute bars. Drag the lines to adjust.
         const rs = rows.current, last = rs[rs.length - 1].close, recent = rs.slice(-5)

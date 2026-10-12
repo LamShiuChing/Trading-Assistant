@@ -68,6 +68,7 @@ type State = {
   bar?: BarMsg
   portfolio?: Portfolio
   screener?: { updated: string; rows: import('./panels/Screener').ScreenRow[] }
+  news?: { items: import('./panels/News').NewsItem[]; tagger_error: string | null; model: string }
 }
 
 let state: State = { ws: 'connecting', alerts: [] }

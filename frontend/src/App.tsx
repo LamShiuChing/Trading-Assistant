@@ -3,6 +3,7 @@ import { Boundary } from './Boundary'
 import { Chart } from './panels/Chart'
 import { Login } from './panels/Login'
 import { AccountSummary, PortfolioTabs } from './panels/Portfolio'
+import { NewsPanel } from './panels/News'
 import { ScreenerPanel } from './panels/Screener'
 import { ConfirmModal, RiskPanel, TicketPanel, usePreview } from './panels/Ticket'
 import { api, ApiError, dismissAlert, pushAlert, restartApp, useStore } from './ws'
@@ -53,16 +54,16 @@ export default function App() {
       {showLogin ? (
         <Login />
       ) : (
-        <Workspace view={view} />
+        <Workspace view={view} setView={setView} />
       )}
       <Alerts />
     </div>
   )
 }
 
-type View = 'trade' | 'portfolio'
+type View = 'trade' | 'screener' | 'portfolio'
 
-function Workspace({ view }: { view: View }) {
+function Workspace({ view, setView }: { view: View; setView: (v: View) => void }) {
   const ticket = useStore((s) => s.ticket)
   const { preview, error } = usePreview(ticket)
   const [staged, setStaged] = useState(false)
@@ -77,6 +78,14 @@ function Workspace({ view }: { view: View }) {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  if (view === 'screener') {
+    return (
+      <main className="workspace screener-view">
+        <Boundary name="Screener"><ScreenerPanel onOpen={() => setView('trade')} /></Boundary>
+        <Boundary name="News"><NewsPanel /></Boundary>
+      </main>
+    )
+  }
   if (view === 'portfolio') {
     return (
       <main className="workspace portfolio-view">
@@ -89,13 +98,13 @@ function Workspace({ view }: { view: View }) {
     )
   }
   return (
-    <main className="workspace trade-view">
-      <Boundary name="Screener"><ScreenerPanel /></Boundary>
+    <main className="workspace">
       <Boundary name="Chart"><Chart preview={preview} /></Boundary>
       <div className="right">
         <Boundary name="Account"><AccountSummary /></Boundary>
         <Boundary name="Ticket"><TicketPanel preview={preview} error={error} onStage={stage} /></Boundary>
         <Boundary name="Risk"><RiskPanel /></Boundary>
+        <Boundary name="News"><ChartNews /></Boundary>
       </div>
       {staged && preview && <ConfirmModal preview={preview} onClose={() => setStaged(false)} />}
     </main>
@@ -103,6 +112,11 @@ function Workspace({ view }: { view: View }) {
 }
 
 const ALERT_MS = { info: 6000, warn: 10000, error: 15000 }
+
+function ChartNews() {
+  const symbol = useStore((s) => s.chart?.symbol)
+  return symbol ? <NewsPanel symbol={symbol} compact /> : null
+}
 
 function Alerts() {
   const alerts = useStore((s) => s.alerts)
@@ -149,6 +163,7 @@ async function killSwitch() {
 function Header({ view, setView, showNav }: { view: View; setView: (v: View) => void; showNav: boolean }) {
   const conn = useStore((s) => s.connection)!
   const counts = useStore((s) => s.portfolio && `${s.portfolio.positions.length} pos · ${s.portfolio.orders.length} orders`)
+  const screenCount = useStore((s) => s.screener?.rows.filter((r) => !r.fails.length).length)
   const [blockers, setBlockers] = useState<string[]>()
   const [quitting, setQuitting] = useState(false)
 
@@ -171,6 +186,7 @@ function Header({ view, setView, showNav }: { view: View; setView: (v: View) => 
       const typing = (e.target as HTMLElement).closest('input, textarea, select')
       if (!typing && !e.ctrlKey && !e.altKey && !e.metaKey && !document.querySelector('.modal')) {
         if (e.key.toLowerCase() === 't') setView('trade')
+        if (e.key.toLowerCase() === 's') setView('screener')
         if (e.key.toLowerCase() === 'p') setView('portfolio')
       }
     }
@@ -187,6 +203,9 @@ function Header({ view, setView, showNav }: { view: View; setView: (v: View) => 
       {showNav && (
         <nav className="seg small views">
           <button className={view === 'trade' ? 'on' : ''} onClick={() => setView('trade')} title="Shortcut: T">Trade</button>
+          <button className={view === 'screener' ? 'on' : ''} onClick={() => setView('screener')} title="Shortcut: S">
+            Screener {screenCount != null && <span className="muted">{screenCount}</span>}
+          </button>
           <button className={view === 'portfolio' ? 'on' : ''} onClick={() => setView('portfolio')} title="Shortcut: P">
             Portfolio {counts && <span className="muted">{counts}</span>}
           </button>

@@ -12,7 +12,7 @@ const PART_COLOR: Record<string, string> = {
 }
 const money = (v: number) => (v >= 1e9 ? `${(v / 1e9).toFixed(1)}B` : `${(v / 1e6).toFixed(0)}M`)
 
-export function ScreenerPanel() {
+export function ScreenerPanel({ onOpen }: { onOpen: () => void }) {
   const data = useStore((s) => s.screener)
   const current = useStore((s) => s.chart?.symbol)
   const [open, setOpen] = useState<string>()
@@ -38,18 +38,30 @@ export function ScreenerPanel() {
       <div className="table-wrap">
         <table className="screen">
           <thead>
-            <tr><th>Symbol</th><th title="vs prior close">Chg%</th><th title="Gap vs prior close, in daily ATRs">Gap</th>
-              <th title="Volume so far vs average at this time of day">RVOL</th><th>Score</th></tr>
+            <tr><th>Symbol</th><th>Price</th><th title="vs prior close">Chg%</th><th title="Gap vs prior close, in daily ATRs">Gap (ATR)</th>
+              <th title="Volume so far vs average at this time of day">RVOL</th><th>Avg $vol</th><th>Spread</th>
+              <th>Catalyst</th><th>Sector</th><th>Score</th><th>Fails</th></tr>
           </thead>
           <tbody>
             {data?.rows.map((r) => (
               <Fragment key={r.symbol}>
                 <tr className={`${r.fails.length ? 'dim' : ''} ${r.symbol === current ? 'sel' : ''}`}
-                  onClick={() => (api('/api/chart', { symbol: r.symbol }).catch(() => {}), setOpen(open === r.symbol ? undefined : r.symbol))}>
-                  <td><b>{r.symbol}</b></td>
-                  <td className={r.change_pct >= 0 ? 'up' : 'down'}>{r.change_pct > 0 ? '+' : ''}{r.change_pct.toFixed(1)}</td>
+                  onClick={() => setOpen(open === r.symbol ? undefined : r.symbol)}>
+                  <td>
+                    <button className="link" title="Open in the Trade view" onClick={(e) => {
+                      e.stopPropagation()
+                      api('/api/chart', { symbol: r.symbol }).catch(() => {})
+                      onOpen()
+                    }}><b>{r.symbol}</b></button>
+                  </td>
+                  <td>{r.price.toFixed(2)}</td>
+                  <td className={r.change_pct >= 0 ? 'up' : 'down'}>{r.change_pct > 0 ? '+' : ''}{r.change_pct.toFixed(1)}%</td>
                   <td>{r.gap_atr.toFixed(1)}</td>
                   <td>{r.rvol?.toFixed(1) ?? '—'}</td>
+                  <td>{money(r.avg_usd_vol)}</td>
+                  <td>{r.spread_pct != null ? r.spread_pct.toFixed(2) + '%' : '—'}</td>
+                  <td>{r.catalyst ? <span className="chip">{r.catalyst}</span> : <span className="muted">—</span>}</td>
+                  <td className="muted">{r.industry || '—'}</td>
                   <td>
                     <span className="score">{r.score.toFixed(0)}</span>
                     <span className="partbar">
@@ -58,10 +70,11 @@ export function ScreenerPanel() {
                       ))}
                     </span>
                   </td>
+                  <td className="error-text small">{r.fails.join(', ')}</td>
                 </tr>
                 {open === r.symbol && (
                   <tr className="detail">
-                    <td colSpan={5}>
+                    <td colSpan={11}>
                       <div className="parts">
                         {Object.entries(r.parts).map(([k, v]) => (
                           <span key={k}><i style={{ background: PART_COLOR[k] }} />{k} {v > 0 ? '+' : ''}{v}</span>
