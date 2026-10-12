@@ -55,6 +55,9 @@ header {
 
 .login { width: 340px; display: flex; flex-direction: column; gap: 12px; }
 .login label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.pw { display: flex; }
+.pw input { flex: 1; min-width: 0; border-radius: 4px 0 0 4px; }
+.pw button { border-left: 0; border-radius: 0 4px 4px 0; width: 56px; color: var(--muted); }
 .login label.check { flex-direction: row; align-items: center; gap: 8px; }
 .seg { display: flex; }
 .seg button { flex: 1; border-radius: 0; font-weight: 600; }

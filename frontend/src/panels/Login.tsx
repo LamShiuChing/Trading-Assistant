@@ -23,6 +23,7 @@ export function Login() {
   const [setup, setSetup] = useState<Setup>()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [mode, setMode] = useState<'paper' | 'live'>('paper')
   const [remember, setRemember] = useState(false)
   const [submitError, setSubmitError] = useState<string>()
@@ -113,13 +114,24 @@ export function Login() {
         </label>
         <label>
           Password
-          <input
-            type="password"
-            value={password}
-            placeholder={setup.saved_password ? 'Saved in Windows Credential Manager' : ''}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="off"
-          />
+          <span className="pw">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              placeholder={setup.saved_password ? 'Saved in Windows Credential Manager' : ''}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              aria-pressed={showPassword}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              onClick={() => setShowPassword((v) => !v)}
+            >
+              {showPassword ? 'Hide' : 'Show'}
+            </button>
+          </span>
         </label>
         <label className="check">
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
